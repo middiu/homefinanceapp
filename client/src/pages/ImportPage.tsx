@@ -5,13 +5,14 @@ import { Select } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
-import { Upload, Undo2, Save, FileUp } from 'lucide-react';
+import { Upload, Undo2, Save, FileUp, Sparkles } from 'lucide-react';
 import {
   useListAccountsQuery,
   useListImportBatchesQuery,
   useDeleteImportBatchMutation,
   useUploadImportMutation,
   useCommitImportMutation,
+  useEstimateAiMutation,
   useListMappingsQuery,
   useCreateMappingMutation,
   useDeleteMappingMutation,
@@ -31,6 +32,7 @@ export default function ImportPage() {
   const [deleteMapping] = useDeleteMappingMutation();
   const [upload] = useUploadImportMutation();
   const [commit] = useCommitImportMutation();
+  const [estimateAi] = useEstimateAiMutation();
 
   const [accountId, setAccountId] = useState('');
   const [format, setFormat] = useState<ImportFileFormat>('csv');
@@ -40,6 +42,8 @@ export default function ImportPage() {
   const [mappingName, setMappingName] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [aiEstimate, setAiEstimate] = useState<any>(null);
+  const [aiEstimating, setAiEstimating] = useState(false);
 
   async function doUpload() {
     if (!file || !accountId) { setError('Select account and file'); return; }
@@ -52,6 +56,7 @@ export default function ImportPage() {
       if (format === 'csv') fd.append('columnMap', JSON.stringify(columnMap));
       const r: any = await upload(fd);
       setPreview(r.data);
+      setAiEstimate(null);
       // prefill columnMap from headers if empty
       if (format === 'csv' && Object.keys(columnMap).length === 0) {
         const auto: Record<string, string | null> = {};
@@ -177,9 +182,27 @@ export default function ImportPage() {
         <Card className="mt-4">
           <CardHeader className="flex-row items-center justify-between">
             <CardTitle>Preview ({preview.rows.length} rows)</CardTitle>
-            <Button onClick={doCommit} disabled={busy}><FileUp className="h-4 w-4" /> Commit import</Button>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" disabled={aiEstimating} onClick={async () => {
+                setAiEstimating(true);
+                try {
+                  const rows = preview.rows.filter((r: any) => !r.isDuplicate).map((r: any) => ({ description: r.description, amount: r.amount }));
+                  const res: any = await estimateAi({ rows });
+                  setAiEstimate(res.data);
+                } catch (e: any) { setAiEstimate({ error: e.message }); }
+                finally { setAiEstimating(false); }
+              }}><Sparkles className="h-4 w-4" /> {aiEstimating ? 'Estimating…' : 'Estimate AI need'}</Button>
+              <Button onClick={doCommit} disabled={busy}><FileUp className="h-4 w-4" /> Commit import</Button>
+            </div>
           </CardHeader>
           <CardContent>
+            {aiEstimate && !aiEstimate.error && (
+              <div className="mb-3 rounded-md border border-border bg-muted/30 p-2 text-sm">
+                <Badge tone={aiEstimate.autoCategorize ? 'warning' : 'muted'}><Sparkles className="mr-1 h-3 w-3" />{aiEstimate.autoCategorize ? 'Auto-categorize ON' : 'Auto-categorize OFF'}</Badge>
+                <span className="ml-2 text-muted-foreground">{aiEstimate.needAi} of {aiEstimate.total} rows would use AI (no matching rule). {aiEstimate.autoCategorize ? 'AI will run on commit.' : 'Enable AI auto-categorize in AI & Insights to run on commit.'}</span>
+              </div>
+            )}
+            {aiEstimate?.error && <p className="mb-3 text-sm text-red-400">{aiEstimate.error}</p>}
             <div className="max-h-96 overflow-y-auto">
               <table className="w-full text-sm">
                 <thead className="sticky top-0 bg-card">
@@ -212,7 +235,11 @@ export default function ImportPage() {
                 <div key={b.id} className="flex items-center justify-between border-b border-border py-2 text-sm last:border-0">
                   <div>
                     <div className="font-medium">{b.fileName}</div>
-                    <div className="text-xs text-muted-foreground">{formatDate(b.importedAt.slice(0, 10))} · {b.rowCount} rows · {b.duplicateCount} duplicates · <Badge tone="muted">{b.fileFormat}</Badge></div>
+                    <div className="text-xs text-muted-foreground">
+                      {formatDate(b.importedAt.slice(0, 10))} · {b.rowCount} rows · {b.duplicateCount} duplicates
+                      {b.aiCategorizedCount > 0 && <> · <Badge tone="warning">AI {b.aiCategorizedCount}</Badge></>}
+                      · <Badge tone="muted">{b.fileFormat}</Badge>
+                    </div>
                   </div>
                   <Button variant="ghost" size="sm" onClick={() => deleteBatch(b.id)}><Undo2 className="h-4 w-4" /> Undo</Button>
                 </div>

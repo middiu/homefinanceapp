@@ -26,6 +26,11 @@ export const accounts = sqliteTable('accounts', {
   openingBalance: real('opening_balance').notNull().default(0),
   isArchived: integer('is_archived', { mode: 'boolean' }).notNull().default(false),
   createdAt: text('created_at').notNull().default(sql`CURRENT_TIMESTAMP`),
+  // Phase 2 §2 — credit card linking
+  linkedRepaymentAccountId: text('linked_repayment_account_id'),
+  creditLimit: real('credit_limit'),
+  statementClosingDay: integer('statement_closing_day'),
+  paymentDueDay: integer('payment_due_day'),
 });
 
 export const accountOwnership = sqliteTable('account_ownership', {
@@ -40,6 +45,7 @@ export const categories = sqliteTable('categories', {
   name: text('name').notNull(),
   parentId: text('parent_id'),
   isCustom: integer('is_custom', { mode: 'boolean' }).notNull().default(false),
+  type: text('type', { enum: ['income', 'expense', 'transfer'] }), // Phase 2 §7.3
 });
 
 export const rules = sqliteTable('rules', {
@@ -51,6 +57,9 @@ export const rules = sqliteTable('rules', {
   categoryId: text('category_id').notNull().references(() => categories.id, { onDelete: 'cascade' }),
   priority: integer('priority').notNull().default(100),
   isActive: integer('is_active', { mode: 'boolean' }).notNull().default(true),
+  ruleSource: text('rule_source', { enum: ['manual', 'ai_generated', 'seeded'] }).notNull().default('manual'),
+  updatedFromAiAt: text('updated_from_ai_at'),
+  seedVersion: text('seed_version'),
 });
 
 export const importBatches = sqliteTable('import_batches', {
@@ -61,6 +70,7 @@ export const importBatches = sqliteTable('import_batches', {
   fileFormat: text('file_format', { enum: ['csv', 'ofx', 'qif'] }).notNull(),
   rowCount: integer('row_count').notNull().default(0),
   duplicateCount: integer('duplicate_count').notNull().default(0),
+  aiCategorizedCount: integer('ai_categorized_count').notNull().default(0), // Phase 2 §3.4
 });
 
 export const transactions = sqliteTable('transactions', {
@@ -72,9 +82,11 @@ export const transactions = sqliteTable('transactions', {
   amount: real('amount').notNull(), // negative = expense, positive = income
   balance: real('balance'),
   categoryId: text('category_id').references(() => categories.id, { onDelete: 'set null' }),
-  source: text('source', { enum: ['manual', 'rule', 'ai'] }).notNull().default('manual'),
+  source: text('source', { enum: ['manual', 'rule', 'ai', 'ai_auto', 'ai_suggested_accepted'] }).notNull().default('manual'),
   importBatchId: text('import_batch_id').references(() => importBatches.id, { onDelete: 'set null' }),
   isTransfer: integer('is_transfer', { mode: 'boolean' }).notNull().default(false),
+  linkedTransactionId: text('linked_transaction_id'), // Phase 2 §2.3
+  needsReview: integer('needs_review', { mode: 'boolean' }).notNull().default(false), // Phase 2 §3.3
   // dedup hash: account_id + date + amount + description hash
   dedupHash: text('dedup_hash').notNull(),
   createdAt: text('created_at').notNull().default(sql`CURRENT_TIMESTAMP`),
@@ -106,4 +118,64 @@ export const aiInsights = sqliteTable('ai_insights', {
 export const settings = sqliteTable('settings', {
   key: text('key').primaryKey(),
   value: text('value').notNull(),
+});
+
+// Phase 2 §4 — Investments
+export const investmentHoldings = sqliteTable('investment_holdings', {
+  id: text('id').primaryKey(),
+  accountId: text('account_id').notNull().references(() => accounts.id, { onDelete: 'cascade' }),
+  ticker: text('ticker').notNull(),
+  purchaseDate: text('purchase_date').notNull(),
+  quantity: real('quantity').notNull(),
+  purchasePrice: real('purchase_price').notNull(),
+  fees: real('fees'),
+  importBatchId: text('import_batch_id').references(() => importBatches.id, { onDelete: 'set null' }),
+  createdAt: text('created_at').notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const priceSnapshots = sqliteTable('price_snapshots', {
+  id: text('id').primaryKey(),
+  ticker: text('ticker').notNull(),
+  price: real('price').notNull(),
+  currency: text('currency').notNull().default('AUD'),
+  snapshotDate: text('snapshot_date').notNull(), // yyyy-mm-dd
+  fetchedAt: text('fetched_at').notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+// Phase 2 §3.3 — AI categorization audit log
+export const aiCategorizationLog = sqliteTable('ai_categorization_log', {
+  id: text('id').primaryKey(),
+  transactionId: text('transaction_id'),
+  batchId: text('batch_id'),
+  description: text('description'),
+  suggestedCategoryId: text('suggested_category_id'),
+  applied: integer('applied', { mode: 'boolean' }).notNull().default(false),
+  ruleCreatedOrUpdatedId: text('rule_created_or_updated_id'),
+  note: text('note'),
+  createdAt: text('created_at').notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+// Phase 2 §5.3 — AI connection test history
+export const aiConnectionTestLog = sqliteTable('ai_connection_test_log', {
+  id: text('id').primaryKey(),
+  testedAt: text('tested_at').notNull().default(sql`CURRENT_TIMESTAMP`),
+  outcome: text('outcome', { enum: ['success', 'failure'] }).notNull(),
+  latencyMs: integer('latency_ms'),
+  errorCategory: text('error_category'),
+});
+
+// Phase 2 §8.3 — cached forecast snapshots
+export const forecastSnapshots = sqliteTable('forecast_snapshots', {
+  id: text('id').primaryKey(),
+  generatedAt: text('generated_at').notNull().default(sql`CURRENT_TIMESTAMP`),
+  scope: text('scope').notNull(),
+  horizonMonths: integer('horizon_months').notNull().default(12),
+  payloadJson: text('payload_json').notNull(),
+});
+
+// Phase 2 §9.3 — seed-rule versioning tracking
+export const seedRulesApplied = sqliteTable('seed_rules_applied', {
+  seedVersion: text('seed_version').primaryKey(),
+  appliedAt: text('applied_at').notNull().default(sql`CURRENT_TIMESTAMP`),
+  count: integer('count').notNull().default(0),
 });

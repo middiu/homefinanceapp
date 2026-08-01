@@ -5,24 +5,26 @@ import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
-import { Plus, Trash2, ArrowUp, ArrowDown, FlaskConical } from 'lucide-react';
+import { Plus, Trash2, ArrowUp, ArrowDown, FlaskConical, RotateCcw } from 'lucide-react';
 import {
-  useListCategoriesQuery, useCreateCategoryMutation, useDeleteCategoryMutation,
+  useListCategoriesQuery, useCreateCategoryMutation, useUpdateCategoryMutation, useDeleteCategoryMutation,
   useListRulesQuery, useCreateRuleMutation, useDeleteRuleMutation, useTestRuleMutation, useReorderRulesMutation,
+  useListSeedDefaultsQuery, useRestoreSeedRuleMutation,
 } from '@/app/api';
 import { PageHeader, EmptyState } from '@/components/common';
-import type { RuleMatchType } from '@homefinance/shared';
+import type { RuleMatchType, CategoryType, RuleSource } from '@homefinance/shared';
 
 export default function CategoriesRulesPage() {
-  const [tab, setTab] = useState<'cats' | 'rules'>('cats');
+  const [tab, setTab] = useState<'cats' | 'rules' | 'defaults'>('cats');
   return (
     <div>
-      <PageHeader title="Categories & Rules" subtitle="Manage taxonomy and auto-categorization rules" />
-      <div className="mb-3 flex gap-2">
+      <PageHeader title="Categories & Rules" subtitle="Manage taxonomy, auto-categorization rules, and default AU rule pack" />
+      <div className="mb-3 flex flex-wrap gap-2">
         <Button variant={tab === 'cats' ? 'default' : 'outline'} size="sm" onClick={() => setTab('cats')}>Categories</Button>
         <Button variant={tab === 'rules' ? 'default' : 'outline'} size="sm" onClick={() => setTab('rules')}>Rules</Button>
+        <Button variant={tab === 'defaults' ? 'default' : 'outline'} size="sm" onClick={() => setTab('defaults')}>Default AU Rules</Button>
       </div>
-      {tab === 'cats' ? <CategoriesTab /> : <RulesTab />}
+      {tab === 'cats' ? <CategoriesTab /> : tab === 'rules' ? <RulesTab /> : <DefaultsTab />}
     </div>
   );
 }
@@ -30,9 +32,11 @@ export default function CategoriesRulesPage() {
 function CategoriesTab() {
   const { data } = useListCategoriesQuery();
   const [create] = useCreateCategoryMutation();
+  const [update] = useUpdateCategoryMutation();
   const [del] = useDeleteCategoryMutation();
   const [name, setName] = useState('');
   const [parentId, setParentId] = useState('');
+  const [type, setType] = useState<CategoryType | ''>('');
   return (
     <div className="grid gap-4 lg:grid-cols-3">
       <Card className="lg:col-span-2">
@@ -42,7 +46,11 @@ function CategoriesTab() {
             <div className="grid gap-1 sm:grid-cols-2">
               {(data ?? []).map((c) => (
                 <div key={c.id} className="flex items-center justify-between rounded-md border border-border px-3 py-1.5">
-                  <span className="text-sm">{c.name} {c.isCustom ? <Badge tone="muted">custom</Badge> : <Badge tone="success">default</Badge>}</span>
+                  <span className="flex items-center gap-2 text-sm">
+                    {c.name}
+                    {c.isCustom ? <Badge tone="muted">custom</Badge> : <Badge tone="success">default</Badge>}
+                    {c.type && <Badge tone={c.type === 'income' ? 'success' : c.type === 'expense' ? 'warning' : 'default'}>{c.type}</Badge>}
+                  </span>
                   {c.isCustom && <button onClick={() => del(c.id)} className="text-muted-foreground hover:text-red-400"><Trash2 className="h-4 w-4" /></button>}
                 </div>
               ))}
@@ -55,13 +63,23 @@ function CategoriesTab() {
         <CardContent className="space-y-3">
           <div><Label>Name</Label><Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Pet Supplies" /></div>
           <div>
+            <Label>Type</Label>
+            <Select value={type} onChange={(e) => setType(e.target.value as CategoryType | '')}>
+              <option value="">— auto —</option>
+              <option value="expense">Expense</option>
+              <option value="income">Income</option>
+              <option value="transfer">Transfer</option>
+              <option value="investment">Investment</option>
+            </Select>
+          </div>
+          <div>
             <Label>Parent (optional)</Label>
             <Select value={parentId} onChange={(e) => setParentId(e.target.value)}>
               <option value="">— none —</option>
               {(data ?? []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </Select>
           </div>
-          <Button onClick={() => { if (name) { create({ name, parentId: parentId || null, isCustom: true }); setName(''); setParentId(''); } }}>
+          <Button onClick={() => { if (name) { create({ name, parentId: parentId || null, isCustom: true, type: type || null }); setName(''); setParentId(''); setType(''); } }}>
             <Plus className="h-4 w-4" /> Add
           </Button>
         </CardContent>
@@ -70,8 +88,15 @@ function CategoriesTab() {
   );
 }
 
+function sourceBadge(src: RuleSource) {
+  if (src === 'seeded') return <Badge tone="success">Default</Badge>;
+  if (src === 'ai_generated') return <Badge tone="warning">AI-generated</Badge>;
+  return <Badge tone="muted">Manual</Badge>;
+}
+
 function RulesTab() {
-  const { data: rules } = useListRulesQuery();
+  const [sourceFilter, setSourceFilter] = useState<string>('');
+  const { data: rules } = useListRulesQuery(sourceFilter ? { source: sourceFilter } : undefined);
   const { data: cats } = useListCategoriesQuery();
   const [create] = useCreateRuleMutation();
   const [del] = useDeleteRuleMutation();
@@ -93,9 +118,17 @@ function RulesTab() {
   return (
     <div className="grid gap-4 lg:grid-cols-3">
       <Card className="lg:col-span-2">
-        <CardHeader><CardTitle>Rules (priority order)</CardTitle></CardHeader>
+        <CardHeader className="flex-row items-center justify-between">
+          <CardTitle>Rules (priority order)</CardTitle>
+          <Select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)} className="w-40">
+            <option value="">All sources</option>
+            <option value="manual">Manual</option>
+            <option value="seeded">Default</option>
+            <option value="ai_generated">AI-generated</option>
+          </Select>
+        </CardHeader>
         <CardContent>
-          {(rules ?? []).length === 0 ? <EmptyState message="No rules. Add one to auto-categorize on import." /> : (
+          {(rules ?? []).length === 0 ? <EmptyState message="No rules. Add one or restore defaults from the Default AU Rules tab." /> : (
             <div className="space-y-1">
               {(rules ?? []).map((r, i) => {
                 const cat = cats?.find((c) => c.id === r.categoryId);
@@ -105,6 +138,7 @@ function RulesTab() {
                       <button onClick={() => move(i, -1)} disabled={i === 0} className="text-muted-foreground hover:text-foreground disabled:opacity-30"><ArrowUp className="h-3 w-3" /></button>
                       <button onClick={() => move(i, 1)} disabled={i === (rules ?? []).length - 1} className="text-muted-foreground hover:text-foreground disabled:opacity-30"><ArrowDown className="h-3 w-3" /></button>
                     </div>
+                    {sourceBadge(r.ruleSource)}
                     <Badge tone="muted">{r.matchType}</Badge>
                     <code className="flex-1 truncate text-xs">{r.matchValue}</code>
                     {(r.amountMin != null || r.amountMax != null) && <span className="text-xs text-muted-foreground">[{r.amountMin ?? '−'},{r.amountMax ?? '−'}]</span>}
@@ -142,7 +176,7 @@ function RulesTab() {
               {(cats ?? []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </Select>
           </div>
-          <Button onClick={() => { if (form.matchValue && form.categoryId) { create({ ...form, amountMin: form.amountMin ? Number(form.amountMin) : null, amountMax: form.amountMax ? Number(form.amountMax) : null, isActive: true, priority: 100 }); setForm({ matchType: 'contains', matchValue: '', categoryId: '', amountMin: '', amountMax: '' }); } }}>
+          <Button onClick={() => { if (form.matchValue && form.categoryId) { create({ ...form, amountMin: form.amountMin ? Number(form.amountMin) : null, amountMax: form.amountMax ? Number(form.amountMax) : null, isActive: true, priority: 100, ruleSource: 'manual' }); setForm({ matchType: 'contains', matchValue: '', categoryId: '', amountMin: '', amountMax: '' }); } }}>
             <Plus className="h-4 w-4" /> Add rule
           </Button>
           <div className="flex items-center gap-2">
@@ -152,5 +186,42 @@ function RulesTab() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+function DefaultsTab() {
+  const { data: defaults, isLoading } = useListSeedDefaultsQuery();
+  const [restore] = useRestoreSeedRuleMutation();
+  const [filter, setFilter] = useState('');
+  const list = (defaults ?? []).filter((d) => !filter || d.matchValue.toLowerCase().includes(filter.toLowerCase()) || d.category.toLowerCase().includes(filter.toLowerCase()));
+  const removed = list.filter((d) => d.removed).length;
+  return (
+    <Card>
+      <CardHeader className="flex-row items-center justify-between">
+        <CardTitle>Predefined AU default rules</CardTitle>
+        <Input placeholder="Filter…" value={filter} onChange={(e) => setFilter(e.target.value)} className="w-48" />
+      </CardHeader>
+      <CardContent>
+        <p className="mb-3 text-sm text-muted-foreground">
+          {list.length} rules in the seed pack (version {(defaults?.[0] as any)?.seedVersion ?? '—'}). {removed} removed — restore them with the button on each row. Seeded merchant rules run before AI rules; generic rules run last.
+        </p>
+        {isLoading ? <p className="text-sm text-muted-foreground">Loading…</p> : (
+          <div className="max-h-[60vh] space-y-1 overflow-y-auto">
+            {list.map((d: any) => (
+              <div key={d.index} className="flex items-center gap-2 rounded-md border border-border px-3 py-1.5 text-sm">
+                <Badge tone={d.tier === 'merchant' ? 'success' : 'muted'}>{d.tier}</Badge>
+                <Badge tone="muted">{d.matchType}</Badge>
+                <code className="flex-1 truncate text-xs">{d.matchValue}</code>
+                <Badge>{d.category}</Badge>
+                {d.active ? <Badge tone="success">active</Badge> : d.removed ? <Badge tone="warning">removed</Badge> : <Badge tone="danger">no category</Badge>}
+                {d.removed && d.categoryId && (
+                  <button onClick={() => restore({ matchValue: d.matchValue })} className="text-muted-foreground hover:text-primary" title="restore"><RotateCcw className="h-4 w-4" /></button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }

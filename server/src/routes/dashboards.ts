@@ -78,15 +78,18 @@ router.get('/overview', (req, res) => {
 
   for (const t of txns) {
     const month = t.date.slice(0, 7);
-    if (monthlySeries.has(month)) {
+    // Transfers are excluded from spend/income totals (Phase 2 §2.4).
+    if (!t.isTransfer && monthlySeries.has(month)) {
       const s = monthlySeries.get(month)!;
       if (t.amount < 0) s.expense += -t.amount;
       else s.income += t.amount;
     }
     if (inCur(t.date)) {
-      if (t.amount < 0) curSpend += -t.amount;
-      else curIncome += t.amount;
-      if (t.amount < 0) {
+      if (!t.isTransfer) {
+        if (t.amount < 0) curSpend += -t.amount;
+        else curIncome += t.amount;
+      }
+      if (t.amount < 0 && !t.isTransfer) {
         const cn = catName.get(t.categoryId || '') || 'Uncategorized';
         curByCat.set(cn, (curByCat.get(cn) || 0) + -t.amount);
         if (trendMonths.includes(month)) {
@@ -96,9 +99,11 @@ router.get('/overview', (req, res) => {
       }
     }
     if (inPrev(t.date)) {
-      if (t.amount < 0) prevSpend += -t.amount;
-      else prevIncome += t.amount;
-      if (t.amount < 0) {
+      if (!t.isTransfer) {
+        if (t.amount < 0) prevSpend += -t.amount;
+        else prevIncome += t.amount;
+      }
+      if (t.amount < 0 && !t.isTransfer) {
         const cn = catName.get(t.categoryId || '') || 'Uncategorized';
         prevByCat.set(cn, (prevByCat.get(cn) || 0) + -t.amount);
       }
@@ -126,6 +131,7 @@ router.get('/overview', (req, res) => {
       balance: Math.round((balanceByAccount.get(a.id) || 0) * 100) / 100,
       isArchived: a.isArchived,
       spark,
+      creditLimit: (a as any).creditLimit ?? null,
     };
   });
   const byType = new Map<string, typeof accountBalances>();
@@ -145,7 +151,7 @@ router.get('/overview', (req, res) => {
       if (pct > 0) {
         netWorth += ((balanceByAccount.get(a.id) || 0) * pct) / 100;
         for (const t of txns) {
-          if (t.accountId === a.id && inCur(t.date) && t.amount < 0) spend += (-t.amount * pct) / 100;
+          if (t.accountId === a.id && inCur(t.date) && t.amount < 0 && !t.isTransfer) spend += (-t.amount * pct) / 100;
         }
       }
     }
@@ -260,6 +266,7 @@ router.get('/deepdive', (req, res) => {
   for (const t of scopedTxns) {
     const sh = shareOf(t);
     const month = t.date.slice(0, 7);
+    if (t.isTransfer) continue;
     if (inCur(t.date) && t.amount < 0) {
       curSpend += -sh;
       const cn = catName.get(t.categoryId || '') || 'Uncategorized';

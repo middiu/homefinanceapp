@@ -1,5 +1,13 @@
 // Shared DTOs / entity types. Mirrors the Drizzle schema on the server.
-import type { AccountType, CategorySource, InsightType, ImportFileFormat, RuleMatchType } from './enums.js';
+import type {
+  AccountType,
+  CategorySource,
+  InsightType,
+  ImportFileFormat,
+  RuleMatchType,
+  RuleSource,
+  CategoryType,
+} from './enums.js';
 
 export interface MemberDto {
   id: string;
@@ -23,6 +31,11 @@ export interface AccountDto {
   isArchived: boolean;
   createdAt: string;
   ownership: OwnershipDto[];
+  // Phase 2 §2 — credit card linking
+  linkedRepaymentAccountId: string | null;
+  creditLimit: number | null;
+  statementClosingDay: number | null;
+  paymentDueDay: number | null;
 }
 
 export interface CategoryDto {
@@ -30,6 +43,7 @@ export interface CategoryDto {
   name: string;
   parentId: string | null;
   isCustom: boolean;
+  type: CategoryType | null; // Phase 2 §7.3
 }
 
 export interface RuleDto {
@@ -41,6 +55,9 @@ export interface RuleDto {
   categoryId: string;
   priority: number;
   isActive: boolean;
+  ruleSource: RuleSource; // Phase 2 §3.3
+  updatedFromAiAt: string | null;
+  seedVersion: string | null;
 }
 
 export interface TransactionDto {
@@ -54,6 +71,8 @@ export interface TransactionDto {
   source: CategorySource;
   importBatchId: string | null;
   isTransfer: boolean;
+  linkedTransactionId: string | null; // Phase 2 §2.3
+  needsReview: boolean; // Phase 2 §3.3
   balance: number | null;
   createdAt: string;
 }
@@ -66,6 +85,7 @@ export interface ImportBatchDto {
   fileFormat: ImportFileFormat;
   rowCount: number;
   duplicateCount: number;
+  aiCategorizedCount: number; // Phase 2 §3.4
 }
 
 export interface ImportMappingDto {
@@ -95,6 +115,25 @@ export interface AiConfigDto {
   // apiKey is never sent to the client
   hasApiKey: boolean;
   digestCron: string;
+  autoCategorize: boolean; // Phase 2 §3.2
+}
+
+// Phase 2 §5 — AI connection test result
+export interface AiConnectionTestResult {
+  ok: boolean;
+  latencyMs: number | null;
+  errorCategory: 'auth' | 'network' | 'url' | 'unexpected' | null;
+  message: string;
+  models?: string[];
+  testedAt: string;
+}
+
+export interface AiConnectionTestLogEntry {
+  id: string;
+  testedAt: string;
+  outcome: 'success' | 'failure';
+  latencyMs: number | null;
+  errorCategory: string | null;
 }
 
 // API filter primitives — reused by dashboards and the grid (§3.4.3).
@@ -107,13 +146,14 @@ export interface TransactionFilter {
   amountMin?: number;
   amountMax?: number;
   search?: string;
+  needsReview?: boolean; // Phase 2 §3.2
+  isTransfer?: boolean; // Phase 2 §2
   page?: number;
   pageSize?: number;
   sort?: string; // e.g. "date:desc"
 }
 
 export interface DashboardScope {
-  // exactly one of memberId / accountId (or household-wide if neither set)
   memberId?: string | null;
   accountId?: string | null;
   dateFrom?: string;
@@ -125,4 +165,79 @@ export interface PagedResult<T> {
   total: number;
   page: number;
   pageSize: number;
+}
+
+// Phase 2 §4 — Investments
+export interface InvestmentHoldingDto {
+  id: string;
+  accountId: string;
+  ticker: string;
+  purchaseDate: string;
+  quantity: number;
+  purchasePrice: number;
+  fees: number | null;
+  importBatchId: string | null;
+  createdAt: string;
+}
+
+export interface PriceSnapshotDto {
+  id: string;
+  ticker: string;
+  price: number;
+  currency: string;
+  snapshotDate: string;
+  fetchedAt: string;
+}
+
+export interface PortfolioSummary {
+  totalValue: number;
+  totalCost: number;
+  totalGain: number;
+  totalGainPct: number | null;
+  holdings: HoldingAggregate[];
+  allocation: { ticker: string; value: number }[];
+  trend: { date: string; value: number; cost: number }[];
+  stale: boolean;
+}
+
+export interface HoldingAggregate {
+  ticker: string;
+  quantity: number;
+  avgCost: number;
+  cost: number;
+  currentPrice: number | null;
+  currentPriceAt: string | null;
+  currency: string | null;
+  value: number | null;
+  gain: number | null;
+  gainPct: number | null;
+  lots: InvestmentHoldingDto[];
+}
+
+// Phase 2 §7 — Income vs Expense by Category report
+export interface CategoryReportRow {
+  categoryId: string;
+  name: string;
+  type: CategoryType | null;
+  income: number;
+  expense: number;
+  net: number;
+  prevIncome: number;
+  prevExpense: number;
+  deltaPct: number | null;
+}
+
+export interface CategoryReport {
+  period: { from: string; to: string; prevFrom: string; prevTo: string };
+  rows: CategoryReportRow[];
+  totals: { income: number; expense: number; net: number };
+  monthly: { month: string; income: number; expense: number }[];
+}
+
+// Phase 2 §8 — 12-month forecast report
+export interface ForecastReport {
+  history: { month: string; income: number; expense: number; net: number; actual: true }[];
+  forecast: { month: string; income: number; expense: number; net: number; cumulative: number; actual: false }[];
+  recurring: { description: string; amount: number; monthly: number }[];
+  narrative: string;
 }

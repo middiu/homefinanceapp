@@ -35,14 +35,19 @@ function AccountsTab() {
   const [update] = useUpdateAccountMutation();
   const [del] = useDeleteAccountMutation();
   const [editing, setEditing] = useState<any>(null);
+  const [linkErr, setLinkErr] = useState('');
 
-  const empty = { name: '', institution: '', type: 'transaction' as AccountType, openingBalance: '0', ownership: [{ memberId: members?.[0]?.id ?? '', percentage: 100 }] as OwnershipDto[] };
+  const empty = {
+    name: '', institution: '', type: 'transaction' as AccountType, openingBalance: '0',
+    linkedRepaymentAccountId: '', creditLimit: '', statementClosingDay: '', paymentDueDay: '',
+    ownership: [{ memberId: members?.[0]?.id ?? '', percentage: 100 }] as OwnershipDto[],
+  };
 
   return (
     <Card>
       <CardHeader className="flex-row items-center justify-between">
         <CardTitle>Accounts</CardTitle>
-        <Button size="sm" onClick={() => setEditing({ ...empty, id: '' })}><Plus className="h-4 w-4" /> Add</Button>
+        <Button size="sm" onClick={() => { setLinkErr(''); setEditing({ ...empty, id: '' }) }}><Plus className="h-4 w-4" /> Add</Button>
       </CardHeader>
       <CardContent>
         {(data ?? []).length === 0 ? <EmptyState message="No accounts yet" /> : (
@@ -50,8 +55,16 @@ function AccountsTab() {
             {(data ?? []).map((a) => (
               <div key={a.id} className="flex items-center justify-between rounded-md border border-border px-3 py-2">
                 <div>
-                  <div className="text-sm font-medium">{a.name} {a.isArchived && <Badge tone="muted">archived</Badge>}</div>
-                  <div className="text-xs text-muted-foreground">{a.institution} · {a.type} · open {formatAUD(a.openingBalance)}</div>
+                  <div className="text-sm font-medium">
+                    {a.name} {a.isArchived && <Badge tone="muted">archived</Badge>}
+                    {a.type === 'credit_card' && a.creditLimit != null && (
+                      <Badge tone="default" className="ml-1">avail {formatAUD(a.creditLimit)}</Badge>
+                    )}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {a.institution} · {a.type} · open {formatAUD(a.openingBalance)}
+                    {a.type === 'credit_card' && a.linkedRepaymentAccountId && <> · pays from {data?.find((x) => x.id === a.linkedRepaymentAccountId)?.name ?? '?'}</>}
+                  </div>
                   <div className="mt-0.5 flex flex-wrap gap-1">
                     {a.ownership.map((o) => {
                       const m = members?.find((x) => x.id === o.memberId);
@@ -60,7 +73,11 @@ function AccountsTab() {
                   </div>
                 </div>
                 <div className="flex gap-1">
-                  <button onClick={() => setEditing({ id: a.id, name: a.name, institution: a.institution ?? '', type: a.type, openingBalance: String(a.openingBalance), ownership: a.ownership })} className="text-muted-foreground hover:text-foreground"><Pencil className="h-4 w-4" /></button>
+                  <button onClick={() => { setLinkErr(''); setEditing({
+                    id: a.id, name: a.name, institution: a.institution ?? '', type: a.type, openingBalance: String(a.openingBalance), ownership: a.ownership,
+                    linkedRepaymentAccountId: a.linkedRepaymentAccountId ?? '', creditLimit: a.creditLimit != null ? String(a.creditLimit) : '',
+                    statementClosingDay: a.statementClosingDay != null ? String(a.statementClosingDay) : '', paymentDueDay: a.paymentDueDay != null ? String(a.paymentDueDay) : '',
+                  }) }} className="text-muted-foreground hover:text-foreground"><Pencil className="h-4 w-4" /></button>
                   <button onClick={() => del(a.id)} className="text-muted-foreground hover:text-red-400"><Trash2 className="h-4 w-4" /></button>
                 </div>
               </div>
@@ -70,21 +87,32 @@ function AccountsTab() {
       </CardContent>
       {editing && (
         <AccountDialog
+          accounts={data ?? []}
           members={members ?? []}
           initial={editing}
           onClose={() => setEditing(null)}
-          onSave={async (body) => { if (editing.id) await update({ id: editing.id, body }); else await create(body); setEditing(null); }}
+          onSave={async (body) => {
+            try {
+              if (editing.id) await update({ id: editing.id, body }).unwrap(); else await create(body).unwrap();
+              setEditing(null); setLinkErr('');
+            } catch (e: any) {
+              setLinkErr(e?.data?.error ?? e?.message ?? 'save failed');
+            }
+          }}
         />
       )}
+      {linkErr && <p className="px-4 pb-3 text-sm text-red-400">{linkErr}</p>}
     </Card>
   );
 }
 
-function AccountDialog({ members, initial, onClose, onSave }: { members: any[]; initial: any; onClose: () => void; onSave: (b: any) => void }) {
+function AccountDialog({ accounts, members, initial, onClose, onSave }: { accounts: any[]; members: any[]; initial: any; onClose: () => void; onSave: (b: any) => void }) {
   const [f, setF] = useState<any>(initial);
   const [ownership, setOwnership] = useState<OwnershipDto[]>(initial.ownership ?? []);
   const sum = ownership.reduce((s, o) => s + (Number(o.percentage) || 0), 0);
-  const valid = Math.abs(sum - 100) < 0.01 && f.name && ownership.every((o) => o.memberId);
+  const isCc = f.type === 'credit_card';
+  const repaymentOptions = accounts.filter((a) => a.id !== initial.id && a.type !== 'credit_card');
+  const valid = Math.abs(sum - 100) < 0.01 && f.name && ownership.every((o) => o.memberId) && (!isCc || f.linkedRepaymentAccountId);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -97,6 +125,24 @@ function AccountDialog({ members, initial, onClose, onSave }: { members: any[]; 
           <div><Label>Type</Label><Select value={f.type} onChange={(e) => setF({ ...f, type: e.target.value })}><option value="transaction">Transaction</option><option value="savings">Savings</option><option value="credit_card">Credit Card</option><option value="loan">Loan</option><option value="investment">Investment</option></Select></div>
           <div><Label>Opening balance</Label><Input type="number" step="0.01" value={f.openingBalance} onChange={(e) => setF({ ...f, openingBalance: e.target.value })} /></div>
         </div>
+        {isCc && (
+          <div className="mt-3 rounded-md border border-border p-3">
+            <div className="mb-2 text-sm font-medium">Credit card settings</div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="sm:col-span-2">
+                <Label>Linked repayment account (required)</Label>
+                <Select value={f.linkedRepaymentAccountId ?? ''} onChange={(e) => setF({ ...f, linkedRepaymentAccountId: e.target.value })}>
+                  <option value="">Select repayment account…</option>
+                  {repaymentOptions.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.type})</option>)}
+                </Select>
+                <p className="mt-1 text-xs text-muted-foreground">Transfers between this card and the linked account are auto-detected and excluded from spend.</p>
+              </div>
+              <div><Label>Credit limit (AUD)</Label><Input type="number" step="0.01" value={f.creditLimit ?? ''} onChange={(e) => setF({ ...f, creditLimit: e.target.value })} /></div>
+              <div><Label>Statement closing day (1-31)</Label><Input type="number" min={1} max={31} value={f.statementClosingDay ?? ''} onChange={(e) => setF({ ...f, statementClosingDay: e.target.value })} /></div>
+              <div><Label>Payment due day (1-31)</Label><Input type="number" min={1} max={31} value={f.paymentDueDay ?? ''} onChange={(e) => setF({ ...f, paymentDueDay: e.target.value })} /></div>
+            </div>
+          </div>
+        )}
         <div className="mt-3">
           <Label>Ownership split (must sum to 100%)</Label>
           <div className="mt-1 space-y-1">
@@ -118,7 +164,15 @@ function AccountDialog({ members, initial, onClose, onSave }: { members: any[]; 
         </div>
         <div className="mt-4 flex justify-end gap-2">
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button disabled={!valid} onClick={() => onSave({ name: f.name, institution: f.institution || null, type: f.type, openingBalance: Number(f.openingBalance), ownership })}>Save</Button>
+          <Button disabled={!valid} onClick={() => onSave({
+            name: f.name, institution: f.institution || null, type: f.type, openingBalance: Number(f.openingBalance), ownership,
+            ...(isCc ? {
+              linkedRepaymentAccountId: f.linkedRepaymentAccountId || null,
+              creditLimit: f.creditLimit ? Number(f.creditLimit) : null,
+              statementClosingDay: f.statementClosingDay ? Number(f.statementClosingDay) : null,
+              paymentDueDay: f.paymentDueDay ? Number(f.paymentDueDay) : null,
+            } : { linkedRepaymentAccountId: null, creditLimit: null, statementClosingDay: null, paymentDueDay: null }),
+          })}>Save</Button>
         </div>
       </div>
     </div>

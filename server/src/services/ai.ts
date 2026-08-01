@@ -1,8 +1,10 @@
 import { getDb, schema } from '../db/index.js';
 import { config } from '../config.js';
-import { uid } from '../utils.js';
+import { uid, round2 } from '../utils.js';
 import { eq } from 'drizzle-orm';
 import type { InsightType } from '@homefinance/shared';
+import { OLLAMA_CLOUD_MODELS } from '@homefinance/shared';
+import { matchRule, deriveMatchPattern, createOrUpdateAiRule, getActiveRules } from './rules.js';
 
 // ---- Provider abstraction (§3.5 / §4.1) ----
 // Default: Ollama Cloud (OpenAI-compatible /chat/completions). Swappable via config.
@@ -26,6 +28,14 @@ function aiConfig() {
 
 export function isAiEnabled(): boolean {
   return aiConfig().enabled && !!aiConfig().apiKey;
+}
+
+/** Phase 2 §3.2 — separate toggle for automatic per-import AI categorization. */
+export function isAutoCategorizeEnabled(): boolean {
+  const raw = getSetting('ai.autoCategorize');
+  if (raw !== null) return raw === 'true';
+  // default: on when a key is configured
+  return isAiEnabled();
 }
 
 class OllamaCloudProvider implements AiProvider {
@@ -243,4 +253,289 @@ export function latestInsight(scope: string = 'household') {
     .where(eq(schema.aiInsights.scope, scope))
     .all()
     .sort((a, b) => b.generatedAt.localeCompare(a.generatedAt))[0];
+}
+
+// ---- Phase 2 §5 — connector: cloud model list ----
+/** Fetch available models from the provider's /models endpoint, filtered to the
+ *  cloud-hosted allow-list (§5.2). Returns model identifiers. */
+export async function listCloudModels(): Promise<{ models: string[]; raw?: any[]; error?: string }> {
+  const cfg = aiConfig();
+  if (!cfg.apiKey) return { models: [], error: 'No API key configured' };
+  const url = `${cfg.baseUrl.replace(/\/$/, '')}/models`;
+  try {
+    const resp = await fetch(url, { method: 'GET', headers: { Authorization: `Bearer ${cfg.apiKey}` } });
+    if (!resp.ok) {
+      return { models: [], error: `Model list fetch failed (${resp.status})` };
+    }
+    const data = (await resp.json()) as any;
+    const raw: any[] = data?.data ?? data?.models ?? [];
+    const ids: string[] = raw.map((m: any) => (typeof m === 'string' ? m : m.id || m.name)).filter(Boolean);
+    // Filter to cloud-hosted allow-list (§5.2) — keep order of allow-list, only those present.
+    const present = new Set(ids.map((id) => id.toLowerCase()));
+    const filtered = OLLAMA_CLOUD_MODELS.filter((m) => present.has(m.toLowerCase()));
+    // Also include any returned ids that exactly match an allow-list entry (case-insensitive).
+    return { models: filtered.length ? filtered : ids.filter((id) => OLLAMA_CLOUD_MODELS.map((m) => m.toLowerCase()).includes(id.toLowerCase())), raw: ids };
+  } catch (e) {
+    return { models: [], error: (e as Error).message };
+  }
+}
+
+// ---- Phase 2 §5.3 — connection troubleshooting ----
+export async function testConnection(override?: { baseUrl?: string; apiKey?: string }): Promise<{
+  ok: boolean;
+  latencyMs: number | null;
+  errorCategory: 'auth' | 'network' | 'url' | 'unexpected' | null;
+  message: string;
+  models?: string[];
+  testedAt: string;
+}> {
+  const cfg = aiConfig();
+  const baseUrl = (override?.baseUrl ?? (cfg.baseUrl || '')).trim();
+  const apiKey = override?.apiKey ?? cfg.apiKey;
+  const testedAt = new Date().toISOString();
+  if (!baseUrl || !/^https?:\/\//i.test(baseUrl)) {
+    return { ok: false, latencyMs: null, errorCategory: 'url', message: 'Base URL must start with http:// or https://', testedAt };
+  }
+  if (!apiKey) {
+    return { ok: false, latencyMs: null, errorCategory: 'auth', message: 'No API key configured', testedAt };
+  }
+  const start = Date.now();
+  try {
+    const resp = await fetch(`${baseUrl.replace(/\/$/, '')}/models`, { method: 'GET', headers: { Authorization: `Bearer ${apiKey}` } });
+    const latencyMs = Date.now() - start;
+    if (resp.status === 401 || resp.status === 403) {
+      await logTest('failure', latencyMs, 'auth');
+      return { ok: false, latencyMs, errorCategory: 'auth', message: `Authentication failed (${resp.status}). Check your API key.`, testedAt };
+    }
+    if (!resp.ok) {
+      await logTest('failure', latencyMs, 'unexpected');
+      return { ok: false, latencyMs, errorCategory: 'unexpected', message: `Unexpected response: HTTP ${resp.status}`, testedAt };
+    }
+    const data = (await resp.json()) as any;
+    const raw: any[] = data?.data ?? data?.models ?? [];
+    const ids: string[] = raw.map((m: any) => (typeof m === 'string' ? m : m.id || m.name)).filter(Boolean);
+    const present = new Set(ids.map((id) => id.toLowerCase()));
+    const models = OLLAMA_CLOUD_MODELS.filter((m) => present.has(m.toLowerCase()));
+    await logTest('success', latencyMs, null);
+    return { ok: true, latencyMs, errorCategory: null, message: `Connection OK. ${models.length} cloud model(s) available.`, models, testedAt };
+  } catch (e) {
+    const latencyMs = Date.now() - start;
+    const msg = (e as Error).message;
+    const category = /ENOTFOUND|ECONNREFUSED|fetch failed|network|timeout/i.test(msg) ? 'network' : 'unexpected';
+    await logTest('failure', latencyMs, category);
+    return { ok: false, latencyMs, errorCategory: category as any, message: msg, testedAt };
+  }
+}
+
+async function logTest(outcome: 'success' | 'failure', latencyMs: number, errorCategory: string | null) {
+  try {
+    getDb().insert(schema.aiConnectionTestLog).values({ id: uid(), outcome, latencyMs, errorCategory }).run();
+  } catch {
+    /* ignore logging failures */
+  }
+}
+
+export function testHistory(limit = 10) {
+  return getDb()
+    .select()
+    .from(schema.aiConnectionTestLog)
+    .all()
+    .sort((a, b) => b.testedAt.localeCompare(a.testedAt))
+    .slice(0, limit)
+    .map((r) => ({ id: r.id, testedAt: r.testedAt, outcome: r.outcome, latencyMs: r.latencyMs, errorCategory: r.errorCategory }));
+}
+
+// ---- Phase 2 §3 — automatic AI categorization on import ----
+export interface CategorizeItem {
+  id: string; // transaction id (already inserted)
+  rawDescription: string;
+  amount: number;
+}
+
+/** Categorize a batch of uncategorized transactions via AI (Phase 2 §3.2/§3.2b).
+ *  - Batches of 25 to reduce round-trips.
+ *  - Applies returned categories automatically; sets source='ai_auto', needsReview=true.
+ *  - For each, derives a pattern and creates/updates an ai_generated rule.
+ *  - Falls back to "Other" with needsReview=true on any failure.
+ *  Only sends description + amount (privacy §4.5). Never account numbers/balances.
+ *  Returns the number of transactions AI categorized. */
+export async function categorizeBatch(items: CategorizeItem[], batchId: string): Promise<{ categorized: number; aiCalls: number }> {
+  const d = getDb();
+  const cats = d.select().from(schema.categories).all();
+  const catByName = new Map(cats.map((c) => [c.name.toLowerCase(), c]));
+  const other = cats.find((c) => c.name === 'Other');
+  const catList = cats.map((c) => c.name).join(', ');
+  const BATCH = 25;
+  let categorized = 0;
+  let aiCalls = 0;
+
+  for (let i = 0; i < items.length; i += BATCH) {
+    const slice = items.slice(i, i + BATCH);
+    aiCalls++;
+    const lines = slice.map((it, idx) => `${idx + 1}. "${it.rawDescription}" (amount: ${it.amount} AUD)`);
+    const prompt = `You are categorizing bank transactions for an Australian household. For each transaction below, choose the single best category from this list: ${catList}. Reply with one line per transaction in the format "N|category_name" where N is the transaction number. Use ONLY category names from the list.\n\nTransactions:\n${lines.join('\n')}`;
+    let parsed: Record<number, string> = {};
+    let batchOk = false;
+    try {
+      if (isAiEnabled()) {
+        const out = await getProvider().chat(prompt, 'You are a precise transaction categorizer. Reply only with the numbered list, no prose.');
+        parsed = parseCategoryResponse(out);
+        batchOk = true;
+      }
+    } catch (e) {
+      // batch failed — fall back per-item to Other below
+      console.warn('[ai] categorize batch failed', (e as Error).message);
+    }
+
+    for (let j = 0; j < slice.length; j++) {
+      const it = slice[j];
+      const suggestedName = parsed[j + 1];
+      const matched = suggestedName ? catByName.get(suggestedName.toLowerCase()) : undefined;
+      const categoryId = matched?.id ?? other?.id ?? null;
+      const applied = !!(matched);
+      d.update(schema.transactions)
+        .set({ categoryId, source: 'ai_auto', needsReview: true })
+        .where(eq(schema.transactions.id, it.id))
+        .run();
+      let ruleId: string | null = null;
+      if (applied) {
+        const pattern = deriveMatchPattern(it.rawDescription);
+        const res = createOrUpdateAiRule(pattern, categoryId!);
+        ruleId = res.ruleId;
+        categorized++;
+      }
+      d.insert(schema.aiCategorizationLog)
+        .values({
+          id: uid(),
+          transactionId: it.id,
+          batchId,
+          description: it.rawDescription,
+          suggestedCategoryId: categoryId,
+          applied,
+          ruleCreatedOrUpdatedId: ruleId,
+          note: applied ? null : 'fallback: Other',
+        })
+        .run();
+    }
+  }
+  return { categorized, aiCalls };
+}
+
+function parseCategoryResponse(out: string): Record<number, string> {
+  const map: Record<number, string> = {};
+  for (const line of out.split('\n')) {
+    const m = line.match(/^\s*(\d+)\s*[|:\-.)]\s*(.+)$/);
+    if (m) map[parseInt(m[1], 10)] = m[2].trim();
+  }
+  return map;
+}
+
+/** Count how many transactions in a candidate import set would need AI (no rule match). */
+export function estimateAiNeed(rows: { description: string; amount: number }[]): number {
+  const rules = getActiveRules();
+  let n = 0;
+  for (const r of rows) {
+    if (!matchRule(r.description, r.amount, rules)) n++;
+  }
+  return n;
+}
+
+// ---- Phase 2 §8 — 12-month forecast report ----
+function isoYM(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+function addMonth(d: Date, n: number): Date {
+  return new Date(d.getFullYear(), d.getMonth() + n, 1);
+}
+
+export async function buildForecastReport(filter?: { accountId?: string[]; memberId?: string[] }): Promise<{
+  history: { month: string; income: number; expense: number; net: number; actual: true }[];
+  forecast: { month: string; income: number; expense: number; net: number; cumulative: number; actual: false }[];
+  recurring: { description: string; amount: number; monthly: number }[];
+  narrative: string;
+}> {
+  const d = getDb();
+  let txns = d.select().from(schema.transactions).all().filter((t) => !t.isTransfer);
+  if (filter?.accountId?.length) txns = txns.filter((t) => filter.accountId!.includes(t.accountId));
+
+  const now = new Date();
+  // Trailing 12 months (including current).
+  const histMonths: string[] = [];
+  for (let i = 11; i >= 0; i--) histMonths.push(isoYM(addMonth(now, -i)));
+  const byMonth = new Map<string, { income: number; expense: number }>();
+  for (const m of histMonths) byMonth.set(m, { income: 0, expense: 0 });
+  for (const t of txns) {
+    const m = t.date.slice(0, 7);
+    if (!byMonth.has(m)) continue;
+    const e = byMonth.get(m)!;
+    if (t.amount < 0) e.expense += -t.amount;
+    else e.income += t.amount;
+  }
+  const history = histMonths.map((m) => {
+    const e = byMonth.get(m)!;
+    return { month: m, income: round2(e.income), expense: round2(e.expense), net: round2(e.income - e.expense), actual: true as const };
+  });
+
+  // Recurring items (subscriptions) — fold as fixed monthly line items (§8.2).
+  const subs = detectSubscriptions();
+  const recurring = subs.map((s) => {
+    // estimate monthly amount from count over observed window
+    const monthly = s.amount; // conservative: treat the recurring charge as the monthly figure
+    return { description: s.description, amount: round2(s.amount), monthly: round2(s.amount) };
+  });
+
+  // Statistical projection: moving-average + linear trend + simple month seasonality.
+  const incomeSeries = history.map((h) => h.income);
+  const expenseSeries = history.map((h) => h.expense);
+  const netSeries = history.map((h) => h.net);
+
+  const forecast: { month: string; income: number; expense: number; net: number; cumulative: number; actual: false }[] = [];
+  let cumulative = history[history.length - 1]?.net ?? 0;
+  for (let i = 1; i <= 12; i++) {
+    const d2 = addMonth(now, i);
+    const monthKey = isoYM(d2);
+    const income = project(incomeSeries, i);
+    let expense = project(expenseSeries, i);
+    // Add recurring fixed amounts to expense.
+    for (const r of recurring) expense += r.monthly;
+    const net = round2(income - expense);
+    cumulative = round2(cumulative + net);
+    forecast.push({ month: monthKey, income: round2(income), expense: round2(expense), net, cumulative, actual: false as const });
+  }
+
+  // AI narrative (advisory). Computes from numbers; never generates values itself.
+  let narrative = 'AI disabled — statistical projection only. Configure an API key in AI Settings for a narrative.';
+  try {
+    if (isAiEnabled()) {
+      const totalNet = forecast.reduce((s, f) => s + f.net, 0);
+      const lowestCum = Math.min(...forecast.map((f) => f.cumulative));
+      const prompt = `You are a household finance forecaster. Here is a 12-month forecast (AUD) based on the trailing 12 months of history. Net per month: ${JSON.stringify(forecast.map((f) => f.net))}. Cumulative balance projection: ${JSON.stringify(forecast.map((f) => f.cumulative))}. Total forecast net over 12 months: ${totalNet.toFixed(2)}. Lowest cumulative point: ${lowestCum.toFixed(2)}. Write 2-4 sentences noting key trends (income vs expense), any month the cumulative balance may go negative, and seasonal patterns. Advisory only.`;
+      narrative = await getProvider().chat(prompt, 'You are a concise household finance forecaster.');
+    }
+  } catch (e) {
+    narrative = `AI narrative unavailable: ${(e as Error).message}`;
+  }
+
+  return { history, forecast, recurring, narrative };
+}
+
+/** Linear-trend-augmented moving average, with a light seasonality hint from same-month last year. */
+function project(series: number[], ahead: number): number {
+  if (!series.length) return 0;
+  const recent = series.slice(-6);
+  const avg = recent.reduce((s, v) => s + v, 0) / recent.length;
+  // linear trend over last 6
+  let trend = 0;
+  if (recent.length >= 2) {
+    const n = recent.length;
+    const xs = recent.map((_, i) => i);
+    const xmean = xs.reduce((s, v) => s + v, 0) / n;
+    const ymean = recent.reduce((s, v) => s + v, 0) / n;
+    const num = xs.reduce((s, x, i) => s + (x - xmean) * (recent[i] - ymean), 0);
+    const den = xs.reduce((s, x) => s + (x - xmean) ** 2, 0);
+    trend = den ? num / den : 0;
+  }
+  // seasonality: same month one year ago (12 months back from the forecast month = series index ahead-1)
+  const seasonal = series[series.length - 12 + ((ahead - 1) % 12)] ?? avg;
+  return Math.max(0, Math.round((0.5 * (avg + trend * ahead) + 0.5 * seasonal) * 100) / 100);
 }

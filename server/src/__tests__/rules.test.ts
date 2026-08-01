@@ -4,6 +4,7 @@ import { matchRule, getActiveRules } from '../services/rules.js';
 import { uid } from '../utils.js';
 
 let groceriesId: string;
+let inactiveRuleId: string;
 
 beforeAll(() => {
   setupDb();
@@ -18,8 +19,9 @@ beforeAll(() => {
     .values({ id: uid(), matchType: 'regex', matchValue: '^netflix', categoryId: groceriesId, priority: 20, isActive: true })
     .run();
   // inactive rule should be ignored
+  inactiveRuleId = uid();
   db.insert(schema.rules)
-    .values({ id: uid(), matchType: 'equals', matchValue: 'coles', categoryId: groceriesId, priority: 5, isActive: false })
+    .values({ id: inactiveRuleId, matchType: 'equals', matchValue: 'coles-test-inactive', categoryId: groceriesId, priority: 5, isActive: false })
     .run();
   // amount range rule
   db.insert(schema.rules)
@@ -35,9 +37,9 @@ describe('rule engine', () => {
     expect(matchRule('NETFLIX MONTHLY', -19.99)).toBe(groceriesId);
   });
   it('ignores inactive rules', () => {
-    // "coles" would match the inactive equals rule; ensure not matched by it
+    // the inactive rule must not appear in the active set
     const rules = getActiveRules();
-    expect(rules.find((r) => r.matchValue === 'coles')).toBeUndefined();
+    expect(rules.find((r) => r.id === inactiveRuleId)).toBeUndefined();
   });
   it('matches amount_range rules on absolute amount', () => {
     expect(matchRule('BIG SALARY', 5000)).toBe(groceriesId);

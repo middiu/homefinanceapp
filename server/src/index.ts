@@ -18,8 +18,13 @@ import dashboardsRouter from './routes/dashboards.js';
 import aiRouter from './routes/ai.js';
 import settingsRouter from './routes/settings.js';
 import backupsRouter from './routes/backups.js';
+import investmentsRouter from './routes/investments.js';
+import reportsRouter from './routes/reports.js';
 import { runWeeklyDigest } from './services/ai.js';
 import { backupDb } from './services/backup.js';
+import { snapshotPrice } from './services/investments.js';
+import { linkTransfers } from './services/transfers.js';
+import { getDb, schema } from './db/index.js';
 
 const app = express();
 app.use(cors());
@@ -29,7 +34,35 @@ app.use(morgan('dev'));
 // Ensure DB tables exist on boot.
 bootstrap();
 const seeded = seedDefaults();
-console.log(`[db] seeded: ${seeded.categories} categories`);
+console.log(`[db] seeded: ${seeded.categories} categories, ${seeded.rules} rules (added ${seeded.rulesAdded} @ ${seeded.seedVersion})`);
+
+// Link any existing credit-card <-> repayment transfer pairs (Phase 2 §2).
+try {
+  const linked = linkTransfers();
+  if (linked) console.log(`[db] linked ${linked} transfer pair(s)`);
+} catch (e) {
+  console.warn('[db] transfer linking on boot failed', (e as Error).message);
+}
+
+// Daily price snapshot job for held tickers (Phase 2 §4.2). Runs once a day at 18:00.
+const heldTickers = () => {
+  try {
+    const rows = getDb().select().from(schema.investmentHoldings).all();
+    return Array.from(new Set(rows.map((r) => r.ticker)));
+  } catch {
+    return [];
+  }
+};
+cron.schedule('0 18 * * *', async () => {
+  for (const t of heldTickers()) {
+    try {
+      await snapshotPrice(t);
+    } catch (e) {
+      console.warn('[cron] price snapshot failed for', t, (e as Error).message);
+    }
+  }
+});
+console.log('[cron] daily investment price snapshot scheduled: 0 18 * * *');
 
 const api = express.Router();
 api.use('/members', membersRouter);
@@ -42,6 +75,8 @@ api.use('/dashboards', dashboardsRouter);
 api.use('/ai', aiRouter);
 api.use('/settings', settingsRouter);
 api.use('/backups', backupsRouter);
+api.use('/investments', investmentsRouter);
+api.use('/reports', reportsRouter);
 app.use('/api', api);
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }));

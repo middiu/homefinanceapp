@@ -1,9 +1,19 @@
 <!doctype html>
-<html lang="en-AU" class="dark">
+<html lang="en-AU">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>HomeFinance</title>
+    <script>
+      // Apply theme before paint to avoid flash (Phase 2 §6).
+      (function () {
+        try {
+          var stored = localStorage.getItem('hf-theme');
+          var dark = stored ? stored === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
+          if (dark) document.documentElement.classList.add('dark');
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

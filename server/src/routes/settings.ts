@@ -21,12 +21,15 @@ function setSetting(key: string, value: string) {
 
 // AI config (key never returned to client).
 router.get('/ai', (_req, res) => {
+  const hasKey = !!(getSetting('ai.apiKey') || config.ai.apiKey);
   const dto: AiConfigDto = {
     enabled: getSetting('ai.enabled') !== 'false' && config.ai.enabled,
     baseUrl: getSetting('ai.baseUrl') || config.ai.baseUrl,
     model: getSetting('ai.model') || config.ai.model,
-    hasApiKey: !!(getSetting('ai.apiKey') || config.ai.apiKey),
+    hasApiKey: hasKey,
     digestCron: getSetting('ai.digestCron') || config.ai.digestCron,
+    // auto-categorize defaults ON if a key is configured, else OFF (Phase 2 §3.2).
+    autoCategorize: getSetting('ai.autoCategorize') !== null ? getSetting('ai.autoCategorize') === 'true' : hasKey,
   };
   res.json(dto);
 });
@@ -37,6 +40,7 @@ const aiConfigSchema = z.object({
   model: z.string().optional(),
   apiKey: z.string().optional(), // empty string => clear
   digestCron: z.string().optional(),
+  autoCategorize: z.boolean().optional(),
 });
 
 router.put('/ai', (req, res) => {
@@ -47,6 +51,7 @@ router.put('/ai', (req, res) => {
   if (parsed.data.model !== undefined) setSetting('ai.model', parsed.data.model);
   if (parsed.data.apiKey !== undefined) setSetting('ai.apiKey', parsed.data.apiKey);
   if (parsed.data.digestCron !== undefined) setSetting('ai.digestCron', parsed.data.digestCron);
+  if (parsed.data.autoCategorize !== undefined) setSetting('ai.autoCategorize', String(parsed.data.autoCategorize));
   res.json({ ok: true });
 });
 

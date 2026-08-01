@@ -149,6 +149,9 @@ export default function OverviewPage() {
                       <div key={a.id} className="flex items-center justify-between rounded-md border border-border p-2">
                         <div>
                           <div className="text-sm font-medium">{a.name}</div>
+                          {a.type === 'credit_card' && a.creditLimit != null && (
+                            <div className="text-xs text-muted-foreground">avail {formatAUD(a.creditLimit + a.balance)}</div>
+                          )}
                           <Sparkline data={a.spark} />
                         </div>
                         <Money amount={a.balance} />

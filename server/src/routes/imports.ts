@@ -7,6 +7,8 @@ import { getSqlite } from '../db/index.js';
 import { uid, dedupHash } from '../utils.js';
 import { parseFile, mapCsvRow, type ParsedRow } from '../services/parsers.js';
 import { matchRule } from '../services/rules.js';
+import { categorizeBatch, estimateAiNeed, isAutoCategorizeEnabled } from '../services/ai.js';
+import { linkTransfers } from '../services/transfers.js';
 import type { ImportBatchDto, ImportFileFormat, ImportMappingDto } from '@homefinance/shared';
 
 const router = Router();
@@ -79,6 +81,17 @@ router.post('/upload', upload.single('file'), (req, res) => {
   });
 });
 
+// Estimate how many of an upload's rows would need AI categorization (Phase 2 §3.4).
+// Re-uses the parsed rows passed from /upload preview.
+router.post('/estimate-ai', (req, res) => {
+  const parsed = z
+    .object({ rows: z.array(z.object({ description: z.string(), amount: z.number() })) })
+    .safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const need = estimateAiNeed(parsed.data.rows);
+  res.json({ needAi: need, total: parsed.data.rows.length, autoCategorize: isAutoCategorizeEnabled() });
+});
+
 // Commit an import given previously-uploaded parsed rows.
 const commitSchema = z.object({
   accountId: z.string(),
@@ -94,11 +107,12 @@ const commitSchema = z.object({
     }),
   ),
   applyRules: z.boolean().default(true),
+  autoCategorize: z.boolean().optional(), // override the settings toggle
   // for CSV
   columnMap: z.record(z.string(), z.string().nullish()).optional(),
 });
 
-router.post('/commit', (req, res) => {
+router.post('/commit', async (req, res) => {
   const parsed = commitSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const { accountId, format, fileName, rows, applyRules } = parsed.data;
@@ -107,6 +121,7 @@ router.post('/commit', (req, res) => {
   const batchId = uid();
   let inserted = 0;
   let duplicates = 0;
+  const insertedIds: { id: string; rawDescription: string; amount: number }[] = [];
 
   const run = getSqlite().transaction(() => {
     d.insert(schema.importBatches)
@@ -130,9 +145,10 @@ router.post('/commit', (req, res) => {
       }
       const categoryId = applyRules ? matchRule(r.description, r.amount) : null;
       const source = categoryId ? 'rule' : 'manual';
+      const id = uid();
       d.insert(schema.transactions)
         .values({
-          id: uid(),
+          id,
           accountId,
           date: r.date,
           description: r.description,
@@ -143,16 +159,39 @@ router.post('/commit', (req, res) => {
           source,
           importBatchId: batchId,
           isTransfer: false,
+          needsReview: false,
           dedupHash: hash,
         })
         .run();
       inserted++;
+      // collect rows that rules couldn't categorize — candidates for AI.
+      if (!categoryId) insertedIds.push({ id, rawDescription: r.description, amount: r.amount });
     }
     d.update(schema.importBatches).set({ duplicateCount: duplicates }).where(eq(schema.importBatches.id, batchId)).run();
   });
   run();
 
-  res.status(201).json({ batchId, inserted, duplicates, total: rows.length });
+  // Phase 2 §3.2 — AI auto-categorize any rows rules couldn't handle.
+  let aiCategorized = 0;
+  const doAuto = parsed.data.autoCategorize !== undefined ? parsed.data.autoCategorize : isAutoCategorizeEnabled();
+  if (doAuto && insertedIds.length) {
+    try {
+      const r = await categorizeBatch(insertedIds, batchId);
+      aiCategorized = r.categorized;
+    } catch (e) {
+      console.warn('[import] AI categorization failed (import still completes)', (e as Error).message);
+    }
+    d.update(schema.importBatches).set({ aiCategorizedCount: aiCategorized }).where(eq(schema.importBatches.id, batchId)).run();
+  }
+
+  // Phase 2 §2 — detect transfer pairs (credit card <-> repayment) for this account's pairs.
+  try {
+    linkTransfers();
+  } catch (e) {
+    console.warn('[import] transfer linking failed', (e as Error).message);
+  }
+
+  res.status(201).json({ batchId, inserted, duplicates, aiCategorized, total: rows.length });
 });
 
 function mapBatch(r: typeof schema.importBatches.$inferSelect): ImportBatchDto {
@@ -164,6 +203,7 @@ function mapBatch(r: typeof schema.importBatches.$inferSelect): ImportBatchDto {
     fileFormat: r.fileFormat as ImportFileFormat,
     rowCount: r.rowCount,
     duplicateCount: r.duplicateCount,
+    aiCategorizedCount: r.aiCategorizedCount ?? 0,
   };
 }
 

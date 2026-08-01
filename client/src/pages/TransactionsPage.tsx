@@ -3,7 +3,7 @@ import { Table, THead, TBody, TR, TH, TD } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
-import { Download, Plus, Trash2 } from 'lucide-react';
+import { Download, Plus, Trash2, CheckCheck, Unlink } from 'lucide-react';
 import {
   useListTransactionsQuery,
   useListAccountsQuery,
@@ -12,10 +12,13 @@ import {
   useUpdateTransactionMutation,
   useDeleteTransactionMutation,
   useBulkCategorizeMutation,
+  useMarkReviewedMutation,
+  useUnlinkTransferMutation,
   useCreateTransactionMutation,
 } from '@/app/api';
 import { PageHeader, EmptyState, Money } from '@/components/common';
 import { CategorySelect, SourceBadge } from '@/components/CategorySelect';
+import { Badge } from '@/components/ui/badge';
 import { formatAUD, formatDate } from '@/lib/utils';
 
 const PAGE_SIZE = 50;
@@ -33,6 +36,8 @@ export default function TransactionsPage() {
   const [updateTx] = useUpdateTransactionMutation();
   const [deleteTx] = useDeleteTransactionMutation();
   const [bulk] = useBulkCategorizeMutation();
+  const [markReviewed] = useMarkReviewedMutation();
+  const [unlink] = useUnlinkTransferMutation();
   const [createTx] = useCreateTransactionMutation();
 
   const rows = data?.items ?? [];
@@ -100,6 +105,11 @@ export default function TransactionsPage() {
           <option value="">All members</option>
           {members?.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
         </Select>
+        <Select value={String(filters.needsReview ?? '')} onChange={(e) => set('needsReview', e.target.value === '' ? undefined : e.target.value === 'true')} className="w-40">
+          <option value="">All statuses</option>
+          <option value="true">Needs review</option>
+          <option value="false">Reviewed only</option>
+        </Select>
         <Input type="date" value={filters.dateFrom ?? ''} onChange={(e) => set('dateFrom', e.target.value || undefined)} className="w-40" />
         <Input type="date" value={filters.dateTo ?? ''} onChange={(e) => set('dateTo', e.target.value || undefined)} className="w-40" />
         <Select value={filters.sort ?? 'date:desc'} onChange={(e) => setFilters((f: any) => ({ ...f, sort: e.target.value }))} className="w-40">
@@ -116,6 +126,7 @@ export default function TransactionsPage() {
           <span className="text-sm font-medium">{selected.size} selected</span>
           <CategorySelect value={bulkCat} onChange={setBulkCat} className="w-44" />
           <Button size="sm" onClick={async () => { await bulk({ ids: [...selected], categoryId: bulkCat, source: 'manual' }); setSelected(new Set()); }}>Apply category</Button>
+          <Button size="sm" variant="outline" onClick={async () => { await markReviewed({ ids: [...selected] }); setSelected(new Set()); }}><CheckCheck className="h-4 w-4" /> Mark reviewed</Button>
           <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>Clear</Button>
         </div>
       )}
@@ -128,7 +139,7 @@ export default function TransactionsPage() {
             <TH className="w-36">Account</TH>
             <TH>Description</TH>
             <TH className="w-44">Category</TH>
-            <TH className="w-16">Src</TH>
+            <TH className="w-20">Src</TH>
             <TH className="w-24 text-right">Amount</TH>
             <TH className="w-10"></TH>
           </TR>
@@ -143,7 +154,13 @@ export default function TransactionsPage() {
               <TD><input type="checkbox" checked={selected.has(t.id)} onChange={() => toggle(t.id)} /></TD>
               <TD className="whitespace-nowrap text-muted-foreground">{formatDate(t.date)}</TD>
               <TD className="truncate text-muted-foreground">{accounts?.find((a) => a.id === t.accountId)?.name}</TD>
-              <TD className="truncate" title={t.description}>{t.description}</TD>
+              <TD className="truncate" title={t.rawDescription ? `${t.rawDescription}\n— normalized: ${t.description}` : t.description}>
+                {t.description}
+                <div className="flex gap-1">
+                  {t.needsReview && <Badge tone="warning">review</Badge>}
+                  {t.isTransfer && <Badge tone="default">transfer</Badge>}
+                </div>
+              </TD>
               <TD>
                 <CategorySelect
                   value={t.categoryId}
@@ -153,7 +170,11 @@ export default function TransactionsPage() {
               <TD><SourceBadge source={t.source} /></TD>
               <TD className="text-right whitespace-nowrap"><Money amount={t.shareAmount ?? t.amount} signed /></TD>
               <TD>
-                <button onClick={() => deleteTx(t.id)} className="text-muted-foreground hover:text-red-400"><Trash2 className="h-4 w-4" /></button>
+                <div className="flex gap-1">
+                  {t.needsReview && <button onClick={async () => { await markReviewed({ ids: [t.id] }); }} className="text-muted-foreground hover:text-emerald-400" title="mark reviewed"><CheckCheck className="h-4 w-4" /></button>}
+                  {t.isTransfer && t.linkedTransactionId && <button onClick={() => unlink(t.id)} className="text-muted-foreground hover:text-foreground" title="unlink transfer"><Unlink className="h-4 w-4" /></button>}
+                  <button onClick={() => deleteTx(t.id)} className="text-muted-foreground hover:text-red-400"><Trash2 className="h-4 w-4" /></button>
+                </div>
               </TD>
             </TR>
           ))}

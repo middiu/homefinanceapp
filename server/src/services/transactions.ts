@@ -16,6 +16,8 @@ export function mapTx(r: typeof schema.transactions.$inferSelect): TransactionDt
     source: r.source as CategorySource,
     importBatchId: r.importBatchId,
     isTransfer: r.isTransfer,
+    linkedTransactionId: r.linkedTransactionId,
+    needsReview: r.needsReview,
     balance: r.balance,
     createdAt: r.createdAt,
   };
@@ -41,6 +43,8 @@ export function buildFilter(filter: TransactionFilter): SQL[] {
   if (filter.amountMin != null) conds.push(gte(schema.transactions.amount, filter.amountMin));
   if (filter.amountMax != null) conds.push(lte(schema.transactions.amount, filter.amountMax));
   if (filter.search) conds.push(like(schema.transactions.description, `%${filter.search}%`));
+  if (filter.needsReview) conds.push(eq(schema.transactions.needsReview, true));
+  if (filter.isTransfer != null) conds.push(eq(schema.transactions.isTransfer, filter.isTransfer));
   return conds;
 }
 
@@ -130,6 +134,7 @@ export function createManual(input: {
       categoryId: input.categoryId ?? null,
       source: 'manual',
       isTransfer: false,
+      needsReview: false,
       dedupHash: hash,
     })
     .returning()
@@ -137,10 +142,18 @@ export function createManual(input: {
   return mapTx(r);
 }
 
+/** Any manual confirm/edit clears needs_review (Phase 2 §3.2). */
 export function bulkCategorize(ids: string[], categoryId: string | null, source: CategorySource = 'manual') {
   const d = getDb();
   for (const id of ids) {
-    d.update(schema.transactions).set({ categoryId, source }).where(eq(schema.transactions.id, id)).run();
+    d.update(schema.transactions).set({ categoryId, source, needsReview: false }).where(eq(schema.transactions.id, id)).run();
+  }
+}
+
+export function markReviewed(ids: string[]) {
+  const d = getDb();
+  for (const id of ids) {
+    d.update(schema.transactions).set({ needsReview: false }).where(eq(schema.transactions.id, id)).run();
   }
 }
 

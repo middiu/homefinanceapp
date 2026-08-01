@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { eq } from 'drizzle-orm';
 import { getDb, schema } from '../db/index.js';
 import { uid } from '../utils.js';
-import type { CategoryDto } from '@homefinance/shared';
+import type { CategoryDto, CategoryType } from '@homefinance/shared';
 
 const router = Router();
 const db = () => getDb();
@@ -12,10 +12,11 @@ const body = z.object({
   name: z.string().min(1),
   parentId: z.string().nullish(),
   isCustom: z.boolean().default(true),
+  type: z.enum(['income', 'expense', 'transfer']).nullish(),
 });
 
 function map(r: typeof schema.categories.$inferSelect): CategoryDto {
-  return { id: r.id, name: r.name, parentId: r.parentId, isCustom: r.isCustom };
+  return { id: r.id, name: r.name, parentId: r.parentId, isCustom: r.isCustom, type: (r.type as CategoryType) ?? null };
 }
 
 router.get('/', (_req, res) => {

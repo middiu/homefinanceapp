@@ -21,6 +21,10 @@ const body = z.object({
   openingBalance: z.number().default(0),
   isArchived: z.boolean().default(false),
   ownership: z.array(ownershipSchema).min(1),
+  linkedRepaymentAccountId: z.string().nullish(),
+  creditLimit: z.number().nullish(),
+  statementClosingDay: z.number().int().min(1).max(31).nullish(),
+  paymentDueDay: z.number().int().min(1).max(31).nullish(),
 });
 
 function loadOwnership(accountId: string): OwnershipDto[] {
@@ -43,13 +47,16 @@ function map(r: typeof schema.accounts.$inferSelect): AccountDto {
     isArchived: r.isArchived,
     createdAt: r.createdAt,
     ownership: loadOwnership(r.id),
+    linkedRepaymentAccountId: r.linkedRepaymentAccountId ?? null,
+    creditLimit: r.creditLimit ?? null,
+    statementClosingDay: r.statementClosingDay ?? null,
+    paymentDueDay: r.paymentDueDay ?? null,
   };
 }
 
 function setOwnership(accountId: string, ownership: OwnershipDto[]) {
   const d = db();
   d.delete(schema.accountOwnership).where(eq(schema.accountOwnership.accountId, accountId)).run();
-  // normalize to sum 100 if possible, but accept as given; validate sum=100 at API layer
   const sum = ownership.reduce((s, o) => s + o.percentage, 0);
   if (Math.abs(sum - 100) > 0.01) {
     throw new Error(`ownership percentages must sum to 100, got ${sum}`);
@@ -69,6 +76,16 @@ router.post('/', (req, res) => {
   const parsed = body.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const { ownership, ...rest } = parsed.data;
+  // credit-card link validation
+  if (rest.type === 'credit_card' && !rest.linkedRepaymentAccountId) {
+    return res.status(400).json({ error: 'credit_card accounts require a linked repayment account' });
+  }
+  // linked account must exist and not be a credit card itself
+  if (rest.linkedRepaymentAccountId) {
+    const linked = db().select().from(schema.accounts).where(eq(schema.accounts.id, rest.linkedRepaymentAccountId)).get();
+    if (!linked) return res.status(400).json({ error: 'linked repayment account not found' });
+    if (linked.type === 'credit_card') return res.status(400).json({ error: 'linked repayment account cannot itself be a credit card' });
+  }
   const id = uid();
   const d = db();
   d.insert(schema.accounts).values({ id, ...rest }).run();
@@ -89,6 +106,18 @@ router.put('/:id', (req, res) => {
   const existing = d.select().from(schema.accounts).where(eq(schema.accounts.id, id)).get();
   if (!existing) return res.status(404).json({ error: 'not found' });
   const { ownership, ...rest } = parsed.data;
+  // Determine effective type + link for validation
+  const effType = rest.type ?? existing.type;
+  const effLink = rest.linkedRepaymentAccountId !== undefined ? rest.linkedRepaymentAccountId : existing.linkedRepaymentAccountId;
+  if (effType === 'credit_card' && !effLink) {
+    return res.status(400).json({ error: 'credit_card accounts require a linked repayment account' });
+  }
+  if (rest.linkedRepaymentAccountId) {
+    if (rest.linkedRepaymentAccountId === id) return res.status(400).json({ error: 'cannot link account to itself' });
+    const linked = d.select().from(schema.accounts).where(eq(schema.accounts.id, rest.linkedRepaymentAccountId)).get();
+    if (!linked) return res.status(400).json({ error: 'linked repayment account not found' });
+    if (linked.type === 'credit_card') return res.status(400).json({ error: 'linked repayment account cannot itself be a credit card' });
+  }
   if (Object.keys(rest).length) d.update(schema.accounts).set(rest).where(eq(schema.accounts.id, id)).run();
   if (ownership) {
     try {

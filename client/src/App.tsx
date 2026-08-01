@@ -1,6 +1,7 @@
 import { NavLink, Route, Routes } from 'react-router-dom';
-import { LayoutDashboard, UserSquare2, ListChecks, Upload, Tags, Wallet, Sparkles, DatabaseBackup } from 'lucide-react';
+import { LayoutDashboard, UserSquare2, ListChecks, Upload, Tags, Wallet, Sparkles, DatabaseBackup, TrendingUp, BarChart3, Sun, Moon } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useTheme } from './app/theme';
 import OverviewPage from '@/pages/OverviewPage';
 import DeepDivePage from '@/pages/DeepDivePage';
 import TransactionsPage from '@/pages/TransactionsPage';
@@ -9,17 +10,39 @@ import CategoriesRulesPage from '@/pages/CategoriesRulesPage';
 import AccountsMembersPage from '@/pages/AccountsMembersPage';
 import AiSettingsPage from '@/pages/AiSettingsPage';
 import BackupsPage from '@/pages/BackupsPage';
+import InvestmentsPage from '@/pages/InvestmentsPage';
+import ReportIncomeExpensePage from '@/pages/ReportIncomeExpensePage';
+import ReportForecastPage from '@/pages/ReportForecastPage';
 
 const nav = [
   { to: '/', label: 'Household', icon: LayoutDashboard, end: true },
   { to: '/deepdive', label: 'Person/Account', icon: UserSquare2 },
   { to: '/transactions', label: 'Transactions', icon: ListChecks },
   { to: '/import', label: 'Import', icon: Upload },
+  { to: '/investments', label: 'Investments', icon: TrendingUp },
+  { to: '/reports/income-expense', label: 'Income vs Expense', icon: BarChart3 },
+  { to: '/reports/forecast', label: 'Forecast', icon: Sparkles },
   { to: '/categories', label: 'Categories & Rules', icon: Tags },
   { to: '/accounts', label: 'Accounts & Members', icon: Wallet },
   { to: '/ai', label: 'AI & Insights', icon: Sparkles },
   { to: '/backups', label: 'Backups / Data', icon: DatabaseBackup },
 ];
+
+function ThemeToggle() {
+  const { theme, toggle } = useTheme();
+  return (
+    <button
+      type="button"
+      onClick={toggle}
+      aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+      title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+      className="flex items-center gap-2 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+    >
+      {theme === 'dark' ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
+      <span className="hidden sm:inline">{theme === 'dark' ? 'Light' : 'Dark'}</span>
+    </button>
+  );
+}
 
 export default function App() {
   return (
@@ -47,13 +70,14 @@ export default function App() {
             </NavLink>
           ))}
         </nav>
-        <div className="mt-auto p-3 text-xs text-muted-foreground">
-          AUD · en-AU · self-hosted
+        <div className="mt-auto flex items-center justify-between gap-2 p-3">
+          <span className="text-xs text-muted-foreground">AUD · en-AU</span>
+          <ThemeToggle />
         </div>
       </aside>
       <main className="flex-1 overflow-y-auto">
         {/* Mobile nav */}
-        <div className="flex gap-1 overflow-x-auto border-b border-border bg-card p-2 md:hidden">
+        <div className="flex items-center gap-1 overflow-x-auto border-b border-border bg-card p-2 md:hidden">
           {nav.map((n) => (
             <NavLink
               key={n.to}
@@ -67,6 +91,7 @@ export default function App() {
               {n.label}
             </NavLink>
           ))}
+          <ThemeToggle />
         </div>
         <div className="mx-auto max-w-7xl p-4 md:p-6">
           <Routes>
@@ -74,6 +99,9 @@ export default function App() {
             <Route path="/deepdive" element={<DeepDivePage />} />
             <Route path="/transactions" element={<TransactionsPage />} />
             <Route path="/import" element={<ImportPage />} />
+            <Route path="/investments" element={<InvestmentsPage />} />
+            <Route path="/reports/income-expense" element={<ReportIncomeExpensePage />} />
+            <Route path="/reports/forecast" element={<ReportForecastPage />} />
             <Route path="/categories" element={<CategoriesRulesPage />} />
             <Route path="/accounts" element={<AccountsMembersPage />} />
             <Route path="/ai" element={<AiSettingsPage />} />

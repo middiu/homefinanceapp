@@ -39,7 +39,8 @@ const DDL = [
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     parent_id TEXT REFERENCES categories(id) ON DELETE SET NULL,
-    is_custom INTEGER NOT NULL DEFAULT 0
+    is_custom INTEGER NOT NULL DEFAULT 0,
+    type TEXT
   )`,
   `CREATE TABLE IF NOT EXISTS rules (
     id TEXT PRIMARY KEY,
@@ -97,13 +98,104 @@ const DDL = [
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
   )`,
+  // Phase 2 §4
+  `CREATE TABLE IF NOT EXISTS investment_holdings (
+    id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    ticker TEXT NOT NULL,
+    purchase_date TEXT NOT NULL,
+    quantity REAL NOT NULL,
+    purchase_price REAL NOT NULL,
+    fees REAL,
+    import_batch_id TEXT REFERENCES import_batches(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE TABLE IF NOT EXISTS price_snapshots (
+    id TEXT PRIMARY KEY,
+    ticker TEXT NOT NULL,
+    price REAL NOT NULL,
+    currency TEXT NOT NULL DEFAULT 'AUD',
+    snapshot_date TEXT NOT NULL,
+    fetched_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  )`,
+  // Phase 2 §3.3
+  `CREATE TABLE IF NOT EXISTS ai_categorization_log (
+    id TEXT PRIMARY KEY,
+    transaction_id TEXT,
+    batch_id TEXT,
+    description TEXT,
+    suggested_category_id TEXT,
+    applied INTEGER NOT NULL DEFAULT 0,
+    rule_created_or_updated_id TEXT,
+    note TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  )`,
+  // Phase 2 §5.3
+  `CREATE TABLE IF NOT EXISTS ai_connection_test_log (
+    id TEXT PRIMARY KEY,
+    tested_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    outcome TEXT NOT NULL,
+    latency_ms INTEGER,
+    error_category TEXT
+  )`,
+  // Phase 2 §8.3
+  `CREATE TABLE IF NOT EXISTS forecast_snapshots (
+    id TEXT PRIMARY KEY,
+    generated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    scope TEXT NOT NULL,
+    horizon_months INTEGER NOT NULL DEFAULT 12,
+    payload_json TEXT NOT NULL
+  )`,
+  // Phase 2 §9.3
+  `CREATE TABLE IF NOT EXISTS seed_rules_applied (
+    seed_version TEXT PRIMARY KEY,
+    applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    count INTEGER NOT NULL DEFAULT 0
+  )`,
+];
+
+// Indexes created AFTER migrations, so they can reference Phase 2 columns
+// (e.g. needs_review) that are added to pre-existing tables via ALTER TABLE.
+const INDEX_DDL = [
   `CREATE INDEX IF NOT EXISTS idx_transactions_account_date ON transactions(account_id, date)`,
   `CREATE INDEX IF NOT EXISTS idx_transactions_category ON transactions(category_id)`,
   `CREATE INDEX IF NOT EXISTS idx_transactions_dedup ON transactions(dedup_hash)`,
+  `CREATE INDEX IF NOT EXISTS idx_transactions_needs_review ON transactions(needs_review)`,
+  `CREATE INDEX IF NOT EXISTS idx_transactions_transfer ON transactions(is_transfer)`,
   `CREATE INDEX IF NOT EXISTS idx_ownership_account ON account_ownership(account_id)`,
   `CREATE INDEX IF NOT EXISTS idx_ownership_member ON account_ownership(member_id)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_ownership_acc_member ON account_ownership(account_id, member_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_holdings_account ON investment_holdings(account_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_holdings_ticker ON investment_holdings(ticker)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_price_snapshot_ticker_date ON price_snapshots(ticker, snapshot_date)`,
+  `CREATE INDEX IF NOT EXISTS idx_ai_catlog_batch ON ai_categorization_log(batch_id)`,
 ];
+
+// Columns added in Phase 2 to pre-existing Phase 1 tables. Each is applied only if the
+// column is missing (PRAGMA table_info), so existing data is preserved across redeploy.
+const MIGRATIONS: { table: string; column: string; ddl: string }[] = [
+  // accounts — credit card linking (§2)
+  { table: 'accounts', column: 'linked_repayment_account_id', ddl: `ALTER TABLE accounts ADD COLUMN linked_repayment_account_id TEXT` },
+  { table: 'accounts', column: 'credit_limit', ddl: `ALTER TABLE accounts ADD COLUMN credit_limit REAL` },
+  { table: 'accounts', column: 'statement_closing_day', ddl: `ALTER TABLE accounts ADD COLUMN statement_closing_day INTEGER` },
+  { table: 'accounts', column: 'payment_due_day', ddl: `ALTER TABLE accounts ADD COLUMN payment_due_day INTEGER` },
+  // categories — type (§7.3)
+  { table: 'categories', column: 'type', ddl: `ALTER TABLE categories ADD COLUMN type TEXT` },
+  // rules — rule source / ai tracking / seed versioning (§3.3, §9.3)
+  { table: 'rules', column: 'rule_source', ddl: `ALTER TABLE rules ADD COLUMN rule_source TEXT NOT NULL DEFAULT 'manual'` },
+  { table: 'rules', column: 'updated_from_ai_at', ddl: `ALTER TABLE rules ADD COLUMN updated_from_ai_at TEXT` },
+  { table: 'rules', column: 'seed_version', ddl: `ALTER TABLE rules ADD COLUMN seed_version TEXT` },
+  // transactions — needs review + linked transfer (§2.3, §3.3)
+  { table: 'transactions', column: 'linked_transaction_id', ddl: `ALTER TABLE transactions ADD COLUMN linked_transaction_id TEXT` },
+  { table: 'transactions', column: 'needs_review', ddl: `ALTER TABLE transactions ADD COLUMN needs_review INTEGER NOT NULL DEFAULT 0` },
+  // import_batches — ai categorized count (§3.4)
+  { table: 'import_batches', column: 'ai_categorized_count', ddl: `ALTER TABLE import_batches ADD COLUMN ai_categorized_count INTEGER NOT NULL DEFAULT 0` },
+];
+
+function existingColumns(table: string): Set<string> {
+  const rows = getSqlite().prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  return new Set(rows.map((r) => r.name));
+}
 
 export function bootstrap() {
   const sqlite = getSqlite();
@@ -111,6 +203,21 @@ export function bootstrap() {
   fs.mkdirSync(path.dirname(path.resolve(dbUrl)), { recursive: true });
   const tx = sqlite.transaction(() => {
     for (const stmt of DDL) sqlite.exec(stmt);
+    // Apply Phase 2 column migrations idempotently (preserves existing data).
+    for (const m of MIGRATIONS) {
+      try {
+        const cols = existingColumns(m.table);
+        if (!cols.has(m.column)) sqlite.exec(m.ddl);
+      } catch (e) {
+        // ADD COLUMN can fail if column exists; ignore safely.
+        if (!String((e as Error).message).includes('duplicate column')) {
+          // re-raise unexpected errors
+          throw e;
+        }
+      }
+    }
+    // Indexes run last so they can reference migrated Phase 2 columns.
+    for (const stmt of INDEX_DDL) sqlite.exec(stmt);
   });
   tx();
 }

@@ -2,12 +2,19 @@ import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react';
 import type {
   AccountDto,
   AiConfigDto,
+  AiConnectionTestResult,
+  AiConnectionTestLogEntry,
   CategoryDto,
+  CategoryReport,
   DashboardScope,
+  ForecastReport,
+  HoldingAggregate,
   ImportBatchDto,
   ImportMappingDto,
+  InvestmentHoldingDto,
   MemberDto,
   PagedResult,
+  PortfolioSummary,
   RuleDto,
   TransactionDto,
   TransactionFilter,
@@ -16,7 +23,7 @@ import type {
 export const api = createApi({
   reducerPath: 'api',
   baseQuery: fetchBaseQuery({ baseUrl: '/api' }),
-  tagTypes: ['Member', 'Account', 'Category', 'Rule', 'Transaction', 'ImportBatch', 'Mapping', 'Insight', 'Setting', 'Backup'],
+  tagTypes: ['Member', 'Account', 'Category', 'Rule', 'Transaction', 'ImportBatch', 'Mapping', 'Insight', 'Setting', 'Backup', 'Investment', 'Price', 'TestHistory'],
   endpoints: (b) => ({
     // ---- Members ----
     listMembers: b.query<MemberDto[], void>({ query: () => '/members', providesTags: ['Member'] }),
@@ -37,12 +44,14 @@ export const api = createApi({
     deleteCategory: b.mutation<void, string>({ query: (id) => ({ url: `/categories/${id}`, method: 'DELETE' }), invalidatesTags: ['Category'] }),
 
     // ---- Rules ----
-    listRules: b.query<RuleDto[], void>({ query: () => '/rules', providesTags: ['Rule'] }),
+    listRules: b.query<RuleDto[], void | { source?: string }>({ query: (arg) => (arg?.source ? `/rules?source=${arg.source}` : '/rules'), providesTags: ['Rule'] }),
     createRule: b.mutation<RuleDto, Partial<RuleDto>>({ query: (body) => ({ url: '/rules', method: 'POST', body }), invalidatesTags: ['Rule', 'Transaction'] }),
     updateRule: b.mutation<RuleDto, { id: string; body: Partial<RuleDto> }>({ query: ({ id, body }) => ({ url: `/rules/${id}`, method: 'PUT', body }), invalidatesTags: ['Rule'] }),
     deleteRule: b.mutation<void, string>({ query: (id) => ({ url: `/rules/${id}`, method: 'DELETE' }), invalidatesTags: ['Rule'] }),
     testRule: b.mutation<{ matches: number }, Partial<RuleDto>>({ query: (body) => ({ url: '/rules/test', method: 'POST', body }) }),
     reorderRules: b.mutation<{ ok: true }, string[]>({ query: (ids) => ({ url: '/rules/reorder', method: 'POST', body: { ids } }), invalidatesTags: ['Rule'] }),
+    listSeedDefaults: b.query<any[], void>({ query: () => '/rules/seed-defaults', providesTags: ['Rule'] }),
+    restoreSeedRule: b.mutation<any, { matchValue: string }>({ query: (body) => ({ url: '/rules/seed-defaults/restore', method: 'POST', body }), invalidatesTags: ['Rule'] }),
 
     // ---- Transactions ----
     listTransactions: b.query<PagedResult<TransactionDto & { shareAmount?: number }>, TransactionFilter>({
@@ -56,12 +65,16 @@ export const api = createApi({
       query: (body) => ({ url: '/transactions/bulk', method: 'POST', body }),
       invalidatesTags: ['Transaction'],
     }),
+    markReviewed: b.mutation<{ ok: true }, { ids: string[] }>({ query: (body) => ({ url: '/transactions/review', method: 'POST', body }), invalidatesTags: ['Transaction'] }),
+    linkTransfer: b.mutation<{ ok: true }, { id: string; linkedTransactionId: string }>({ query: (body) => ({ url: `/transactions/${body.id}/link`, method: 'POST', body: { linkedTransactionId: body.linkedTransactionId } }), invalidatesTags: ['Transaction'] }),
+    unlinkTransfer: b.mutation<{ ok: true }, string>({ query: (id) => ({ url: `/transactions/${id}/unlink`, method: 'POST' }), invalidatesTags: ['Transaction'] }),
     suggestCategory: b.mutation<{ categoryId: string | null }, { description: string; amount: number }>({
       query: (body) => ({ url: '/transactions/suggest', method: 'POST', body }),
     }),
 
     // ---- Imports ----
     uploadImport: b.mutation<any, FormData>({ query: (body) => ({ url: '/imports/upload', method: 'POST', body }) }),
+    estimateAi: b.mutation<any, { rows: { description: string; amount: number }[] }>({ query: (body) => ({ url: '/imports/estimate-ai', method: 'POST', body }) }),
     commitImport: b.mutation<any, any>({ query: (body) => ({ url: '/imports/commit', method: 'POST', body }), invalidatesTags: ['Transaction', 'ImportBatch'] }),
     listImportBatches: b.query<ImportBatchDto[], void>({ query: () => '/imports/batches', providesTags: ['ImportBatch'] }),
     deleteImportBatch: b.mutation<void, string>({ query: (id) => ({ url: `/imports/batches/${id}`, method: 'DELETE' }), invalidatesTags: ['Transaction', 'ImportBatch'] }),
@@ -73,6 +86,20 @@ export const api = createApi({
     getOverview: b.query<any, Partial<DashboardScope>>({ query: (s) => ({ url: '/dashboards/overview', params: s }) }),
     getDeepDive: b.query<any, Partial<DashboardScope>>({ query: (s) => ({ url: '/dashboards/deepdive', params: s }) }),
 
+    // ---- Investments ----
+    getPortfolio: b.query<PortfolioSummary, { accountId?: string } | void>({ query: (arg) => ({ url: '/investments/portfolio', params: arg ?? {} }), providesTags: ['Investment', 'Price'] }),
+    listHoldings: b.query<InvestmentHoldingDto[], { accountId?: string } | void>({ query: (arg) => ({ url: '/investments/holdings', params: arg ?? {} }), providesTags: ['Investment'] }),
+    createHolding: b.mutation<InvestmentHoldingDto, any>({ query: (body) => ({ url: '/investments/holdings', method: 'POST', body }), invalidatesTags: ['Investment'] }),
+    deleteHolding: b.mutation<void, string>({ query: (id) => ({ url: `/investments/holdings/${id}`, method: 'DELETE' }), invalidatesTags: ['Investment'] }),
+    importHoldings: b.mutation<any, FormData>({ query: (body) => ({ url: '/investments/holdings/import', method: 'POST', body }), invalidatesTags: ['Investment'] }),
+    refreshPrice: b.mutation<any, { ticker: string }>({ query: (body) => ({ url: '/investments/price/refresh', method: 'POST', body }), invalidatesTags: ['Price'] }),
+
+    // ---- Reports ----
+    getIncomeExpenseReport: b.query<CategoryReport, { preset?: string; dateFrom?: string; dateTo?: string; accountId?: string; memberId?: string }>({
+      query: (p) => ({ url: '/reports/income-expense-by-category', params: p }),
+    }),
+    generateForecastReport: b.mutation<ForecastReport, { accountId?: string[]; memberId?: string[] }>({ query: (body) => ({ url: '/ai/forecast-report', method: 'POST', body }) }),
+
     // ---- AI ----
     aiStatus: b.query<{ enabled: boolean }, void>({ query: () => '/ai/status' }),
     generateInsight: b.mutation<any, { scope?: string }>({ query: (body) => ({ url: '/ai/insight', method: 'POST', body }), invalidatesTags: ['Insight'] }),
@@ -80,6 +107,9 @@ export const api = createApi({
     generateForecast: b.mutation<any, { scope?: string }>({ query: (body) => ({ url: '/ai/forecast', method: 'POST', body }) }),
     listAnomalies: b.query<any, { accountId?: string }>({ query: (p) => ({ url: '/ai/anomalies', params: p }) }),
     listSubscriptions: b.query<any, { accountId?: string }>({ query: (p) => ({ url: '/ai/subscriptions', params: p }) }),
+    listCloudModels: b.query<{ models: string[]; error?: string }, void>({ query: () => '/ai/models' }),
+    testConnection: b.mutation<AiConnectionTestResult, { baseUrl?: string; apiKey?: string }>({ query: (body) => ({ url: '/ai/test-connection', method: 'POST', body }), invalidatesTags: ['TestHistory'] }),
+    testHistory: b.query<AiConnectionTestLogEntry[], void>({ query: () => '/ai/test-history', providesTags: ['TestHistory'] }),
     suggestAiCategory: b.mutation<{ categoryId: string | null; suggestedName?: string }, { description: string; amount?: number }>({
       query: (body) => ({ url: '/ai/suggest-category', method: 'POST', body }),
     }),
@@ -100,11 +130,13 @@ export const {
   useListMembersQuery, useCreateMemberMutation, useUpdateMemberMutation, useDeleteMemberMutation,
   useListAccountsQuery, useCreateAccountMutation, useUpdateAccountMutation, useDeleteAccountMutation,
   useListCategoriesQuery, useCreateCategoryMutation, useUpdateCategoryMutation, useDeleteCategoryMutation,
-  useListRulesQuery, useCreateRuleMutation, useUpdateRuleMutation, useDeleteRuleMutation, useTestRuleMutation, useReorderRulesMutation,
-  useListTransactionsQuery, useCreateTransactionMutation, useUpdateTransactionMutation, useDeleteTransactionMutation, useBulkCategorizeMutation, useSuggestCategoryMutation,
-  useUploadImportMutation, useCommitImportMutation, useListImportBatchesQuery, useDeleteImportBatchMutation, useListMappingsQuery, useCreateMappingMutation, useDeleteMappingMutation,
+  useListRulesQuery, useCreateRuleMutation, useUpdateRuleMutation, useDeleteRuleMutation, useTestRuleMutation, useReorderRulesMutation, useListSeedDefaultsQuery, useRestoreSeedRuleMutation,
+  useListTransactionsQuery, useCreateTransactionMutation, useUpdateTransactionMutation, useDeleteTransactionMutation, useBulkCategorizeMutation, useMarkReviewedMutation, useLinkTransferMutation, useUnlinkTransferMutation, useSuggestCategoryMutation,
+  useUploadImportMutation, useEstimateAiMutation, useCommitImportMutation, useListImportBatchesQuery, useDeleteImportBatchMutation, useListMappingsQuery, useCreateMappingMutation, useDeleteMappingMutation,
   useGetOverviewQuery, useGetDeepDiveQuery,
-  useAiStatusQuery, useGenerateInsightMutation, useLatestInsightQuery, useGenerateForecastMutation, useListAnomaliesQuery, useListSubscriptionsQuery, useSuggestAiCategoryMutation,
+  useGetPortfolioQuery, useListHoldingsQuery, useCreateHoldingMutation, useDeleteHoldingMutation, useImportHoldingsMutation, useRefreshPriceMutation,
+  useGetIncomeExpenseReportQuery, useGenerateForecastReportMutation,
+  useAiStatusQuery, useGenerateInsightMutation, useLatestInsightQuery, useGenerateForecastMutation, useListAnomaliesQuery, useListSubscriptionsQuery, useListCloudModelsQuery, useTestConnectionMutation, useTestHistoryQuery, useSuggestAiCategoryMutation,
   useGetAiConfigQuery, useUpdateAiConfigMutation,
   useListBackupsQuery, useCreateBackupMutation, useDeleteBackupMutation,
 } = api;

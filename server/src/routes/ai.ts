@@ -8,6 +8,10 @@ import {
   latestInsight,
   isAiEnabled,
   getProvider,
+  listCloudModels,
+  testConnection,
+  testHistory,
+  buildForecastReport,
 } from '../services/ai.js';
 import { getDb, schema } from '../db/index.js';
 import { uid } from '../utils.js';
@@ -41,12 +45,24 @@ router.post('/forecast', async (req, res) => {
   }
 });
 
+// Phase 2 §8 — full 12-month forecast report (statistical + recurring + AI narrative).
+router.post('/forecast-report', async (req, res) => {
+  try {
+    const filter: { accountId?: string[]; memberId?: string[] } = {};
+    if (Array.isArray(req.body.accountId)) filter.accountId = req.body.accountId;
+    if (Array.isArray(req.body.memberId)) filter.memberId = req.body.memberId;
+    const r = await buildForecastReport(filter);
+    res.json(r);
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
 router.get('/anomalies', (req, res) => {
   const accountId = (req.query.accountId as string) || undefined;
   res.json(detectAnomalies(accountId));
 });
 
-// Confirm an anomaly is fine (just mark reviewed by tagging the txn — MVP: no-op stub returning ok)
 router.post('/anomalies/:id/confirm', (_req, res) => res.json({ ok: true }));
 
 router.get('/subscriptions', (req, res) => {
@@ -58,7 +74,25 @@ router.get('/status', (_req, res) => {
   res.json({ enabled: isAiEnabled() });
 });
 
-// AI category suggestion for uncategorized transactions.
+// Phase 2 §5.2 — list cloud-hosted models.
+router.get('/models', async (_req, res) => {
+  const r = await listCloudModels();
+  res.json(r);
+});
+
+// Phase 2 §5.3 — test connection. Accepts optional baseUrl/apiKey overrides (pre-save).
+router.post('/test-connection', async (req, res) => {
+  const parsed = z.object({ baseUrl: z.string().optional(), apiKey: z.string().optional() }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const r = await testConnection(parsed.data);
+  res.json(r);
+});
+
+router.get('/test-history', (_req, res) => {
+  res.json(testHistory());
+});
+
+// AI category suggestion for uncategorized transactions (on-demand path still available, Phase 2 §3.2).
 router.post('/suggest-category', async (req, res) => {
   const parsed = z
     .object({
@@ -72,6 +106,7 @@ router.post('/suggest-category', async (req, res) => {
 
   const cats = getDb().select().from(schema.categories).all();
   const catList = cats.map((c) => c.name).join(', ');
+  // AI prompt includes the full raw description (Phase 2 §10).
   const prompt = `Given this bank transaction description: "${parsed.data.description}"${parsed.data.amount ? ` (amount: ${parsed.data.amount} AUD)` : ''}, choose the single best category from this list: ${catList}. Reply with ONLY the exact category name, nothing else.`;
   try {
     const out = (await getProvider().chat(prompt)).trim();

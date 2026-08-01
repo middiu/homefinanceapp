@@ -1,0 +1,223 @@
+// Predefined default categorization rules (Phase 2 §9).
+// Two tiers: merchant-specific (priority 1000+) and generic keyword (priority 3000+).
+// Manual rules (priority < 1000, created by the user) always win; AI-generated rules
+// land at 2000+ so a specific AI-derived merchant rule beats the broad generic layer.
+// All `matchValue` strings are lowercased `contains` patterns; bank statement text is
+// typically abbreviated/all-caps with trailing store numbers, so patterns target the
+// recognisable merchant fragment.
+
+export type SeedRuleTier = 'merchant' | 'generic';
+
+export interface SeedRule {
+  tier: SeedRuleTier;
+  matchType: 'contains' | 'regex' | 'equals' | 'amount_range';
+  matchValue: string;
+  category: string; // must match a DEFAULT_CATEGORIES name
+}
+
+// Merchant-specific rules (priority 1000+).
+export const SEED_MERCHANT_RULES: SeedRule[] = [
+  // Groceries
+  { tier: 'merchant', matchType: 'contains', matchValue: 'coles', category: 'Groceries' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'woolworths', category: 'Groceries' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'safeway', category: 'Groceries' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'aldi', category: 'Groceries' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'iga ', category: 'Groceries' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'foodland', category: 'Groceries' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'harris farm', category: 'Groceries' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'costco', category: 'Groceries' },
+  // Department / shopping
+  { tier: 'merchant', matchType: 'contains', matchValue: 'myer', category: 'Shopping' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'david jones', category: 'Shopping' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'kmart', category: 'Shopping' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'target', category: 'Shopping' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'big w', category: 'Shopping' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'bigw', category: 'Shopping' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'jb hifi', category: 'Shopping' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'harvey norman', category: 'Shopping' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'amazon', category: 'Shopping' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'ebay', category: 'Shopping' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'kogan', category: 'Shopping' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'catch.com', category: 'Shopping' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'the good guys', category: 'Shopping' },
+  // Dining & takeaway / cafes
+  { tier: 'merchant', matchType: 'contains', matchValue: 'mcdonald', category: 'Dining & Takeaway' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'maccas', category: 'Dining & Takeaway' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'kfc', category: 'Dining & Takeaway' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'hungry jacks', category: 'Dining & Takeaway' },
+  { tier: 'merchant', matchType: 'contains', matchValue: "guzman y gomez", category: 'Dining & Takeaway' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'gyg', category: 'Dining & Takeaway' },
+  { tier: 'merchant', matchType: 'contains', matchValue: "domino's", category: 'Dining & Takeaway' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'dominos', category: 'Dining & Takeaway' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'pizza hut', category: 'Dining & Takeaway' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'starbucks', category: 'Dining & Takeaway' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'krispy kreme', category: 'Dining & Takeaway' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'subway', category: 'Dining & Takeaway' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'zagame', category: 'Dining & Takeaway' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'nando', category: 'Dining & Takeaway' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'uber eats', category: 'Dining & Takeaway' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'menulog', category: 'Dining & Takeaway' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'doordash', category: 'Dining & Takeaway' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'deliveroo', category: 'Dining & Takeaway' },
+  // Parking & transport / tolls
+  { tier: 'merchant', matchType: 'contains', matchValue: 'wilson park', category: 'Transport' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'wilson parking', category: 'Transport' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'secure parking', category: 'Transport' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'care park', category: 'Transport' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'linkt', category: 'Transport' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'etoll', category: 'Transport' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'e toll', category: 'Transport' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'opal', category: 'Transport' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'myki', category: 'Transport' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'go card', category: 'Transport' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'gocard', category: 'Transport' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'uber trip', category: 'Transport' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'uber *trip', category: 'Transport' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'ola', category: 'Transport' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'diDi', category: 'Transport' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'taxi', category: 'Transport' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'qantas', category: 'Travel' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'jetstar', category: 'Travel' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'virgin australia', category: 'Travel' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'airbnb', category: 'Travel' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'booking.com', category: 'Travel' },
+  // Fuel
+  { tier: 'merchant', matchType: 'contains', matchValue: 'bp ', category: 'Transport' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'shell', category: 'Transport' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'caltex', category: 'Transport' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'ampol', category: 'Transport' },
+  { tier: 'merchant', matchType: 'contains', matchValue: '7-eleven', category: 'Transport' },
+  { tier: 'merchant', matchType: 'contains', matchValue: '7 eleven', category: 'Transport' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'metro petroleum', category: 'Transport' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'united petroleum', category: 'Transport' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'otoco', category: 'Transport' },
+  // Health & pharmacy
+  { tier: 'merchant', matchType: 'contains', matchValue: 'chemist warehouse', category: 'Health & Medical' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'priceline', category: 'Health & Medical' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'terry white', category: 'Health & Medical' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'chemmart', category: 'Health & Medical' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'amcal', category: 'Health & Medical' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'bupa', category: 'Health & Medical' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'medibank', category: 'Health & Medical' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'hcf', category: 'Health & Medical' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'anytime fitness', category: 'Health & Medical' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'fitness first', category: 'Health & Medical' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'f45', category: 'Health & Medical' },
+  // Entertainment / streaming / cinema
+  { tier: 'merchant', matchType: 'contains', matchValue: 'netflix', category: 'Entertainment' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'spotify', category: 'Entertainment' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'disney', category: 'Entertainment' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'stan ', category: 'Entertainment' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'binge', category: 'Entertainment' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'paramount', category: 'Entertainment' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'apple.com/bill', category: 'Entertainment' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'app store', category: 'Entertainment' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'event cinemas', category: 'Entertainment' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'hoyts', category: 'Entertainment' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'village cinemas', category: 'Entertainment' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'palace cinemas', category: 'Entertainment' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'steam', category: 'Entertainment' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'youtube', category: 'Entertainment' },
+  // Utilities / telco / energy
+  { tier: 'merchant', matchType: 'contains', matchValue: 'telstra', category: 'Utilities' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'optus', category: 'Utilities' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'vodafone', category: 'Utilities' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'tpg', category: 'Utilities' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'amaysim', category: 'Utilities' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'agl', category: 'Utilities' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'origin energy', category: 'Utilities' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'energyaustralia', category: 'Utilities' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'origin ', category: 'Utilities' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'red energy', category: 'Utilities' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'lumo', category: 'Utilities' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'sydney water', category: 'Utilities' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'yarra water', category: 'Utilities' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'nbn', category: 'Utilities' },
+  // Insurance
+  { tier: 'merchant', matchType: 'contains', matchValue: 'nrma', category: 'Insurance' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'allianz', category: 'Insurance' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'aami', category: 'Insurance' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'bingle', category: 'Insurance' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'youi', category: 'Insurance' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'budget direct', category: 'Insurance' },
+  // Hardware / home / office
+  { tier: 'merchant', matchType: 'contains', matchValue: 'bunnings', category: 'Shopping' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'officeworks', category: 'Shopping' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'ikea', category: 'Shopping' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'mitre 10', category: 'Shopping' },
+  // Income / salary
+  { tier: 'merchant', matchType: 'contains', matchValue: 'salary', category: 'Income' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'payroll', category: 'Income' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'wages', category: 'Income' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'pay ', category: 'Income' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'ato refund', category: 'Income' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'interest', category: 'Income' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'dividend', category: 'Income' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'centrelink', category: 'Income' },
+  // Banking fees
+  { tier: 'merchant', matchType: 'contains', matchValue: 'atm fee', category: 'Fees & Charges' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'account fee', category: 'Fees & Charges' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'monthly fee', category: 'Fees & Charges' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'overdraft', category: 'Fees & Charges' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'foreign transaction', category: 'Fees & Charges' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'ex fee', category: 'Fees & Charges' },
+  // Housing / rent / mortgage
+  { tier: 'merchant', matchType: 'contains', matchValue: 'rent', category: 'Housing/Rent/Mortgage' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'mortgage', category: 'Housing/Rent/Mortgage' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'strata', category: 'Housing/Rent/Mortgage' },
+  { tier: 'merchant', matchType: 'contains', matchValue: 'council rate', category: 'Housing/Rent/Mortgage' },
+];
+
+// Generic keyword rules (priority 3000+). Broader catch-all beneath named merchants.
+export const SEED_GENERIC_RULES: SeedRule[] = [
+  { tier: 'generic', matchType: 'contains', matchValue: 'cafe', category: 'Dining & Takeaway' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'coffee', category: 'Dining & Takeaway' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'restaurant', category: 'Dining & Takeaway' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'bistro', category: 'Dining & Takeaway' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'grill', category: 'Dining & Takeaway' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'bar ', category: 'Dining & Takeaway' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'pizza', category: 'Dining & Takeaway' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'bakery', category: 'Dining & Takeaway' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'parking', category: 'Transport' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'park ', category: 'Transport' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'toll', category: 'Transport' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'petrol', category: 'Transport' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'fuel', category: 'Transport' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'servo', category: 'Transport' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'rideshare', category: 'Transport' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'pharmacy', category: 'Health & Medical' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'chemist', category: 'Health & Medical' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'gym', category: 'Health & Medical' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'fitness', category: 'Health & Medical' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'physio', category: 'Health & Medical' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'dental', category: 'Health & Medical' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'medical', category: 'Health & Medical' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'cinema', category: 'Entertainment' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'cinemas', category: 'Entertainment' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'movie', category: 'Entertainment' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'streaming', category: 'Entertainment' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'subscription', category: 'Subscriptions' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'insurance', category: 'Insurance' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'school', category: 'Education' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'college', category: 'Education' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'university', category: 'Education' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'tuition', category: 'Education' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'electricity', category: 'Utilities' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'gas ', category: 'Utilities' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'water ', category: 'Utilities' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'internet', category: 'Utilities' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'mobile', category: 'Utilities' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'phone', category: 'Utilities' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'refund', category: 'Income' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'deposit', category: 'Income' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'transfer', category: 'Transfers' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'bpay', category: 'Transfers' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'interest charge', category: 'Fees & Charges' },
+  { tier: 'generic', matchType: 'contains', matchValue: 'fee ', category: 'Fees & Charges' },
+];
+
+export const SEED_RULES_VERSION = 'phase2-v1';
+
+export function allSeedRules(): SeedRule[] {
+  return [...SEED_MERCHANT_RULES, ...SEED_GENERIC_RULES];
+}
