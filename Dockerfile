@@ -25,19 +25,13 @@ ENV NODE_ENV=production
 ENV DATABASE_URL=/data/homefinance.sqlite
 ENV BACKUP_DIR=/backups
 
-COPY --from=build /app/node_modules ./node_modules
-COPY --from=build /app/client/node_modules ./client/node_modules
-COPY --from=build /app/server/node_modules ./server/node_modules
-COPY --from=build /app/shared/dist ./shared/dist
-COPY --from=build /app/server/dist ./server/dist
-COPY --from=build /app/client/dist ./client/dist
-COPY --from=build /app/server/drizzle ./drizzle
-COPY package.json ./package.json
-COPY server/package.json ./server/package.json
-
-# better-sqlite3 native lib needs no extra runtime deps on bookworm-slim; if it fails,
-# install python3/make/build-essential in build stage (already built into node_modules here).
+# Copy the built tree wholesale. npm workspaces hoists deps into the root
+# node_modules and symlinks the @homefinance/shared workspace package; copying
+# the whole /app preserves those symlinks/resolution so `node server/dist/index.js`
+# finds express, drizzle, better-sqlite3, and @homefinance/shared. Larger image,
+# but correct and simple for a self-hosted personal tool.
+COPY --from=build /app .
 
 EXPOSE 4000
-# Server bootstraps tables + seeds defaults itself.
+# Server bootstraps tables + seeds defaults itself on boot.
 CMD ["node", "server/dist/index.js"]
