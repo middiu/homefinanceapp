@@ -1,0 +1,32 @@
+{
+  "name": "homefinance",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Self-hosted personal home finance reporting tool",
+  "workspaces": [
+    "client",
+    "server",
+    "shared"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -n server,client -c green,cyan \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:server": "npm -w server run dev",
+    "dev:client": "npm -w client run dev",
+    "build": "npm run build:shared && npm run build:server && npm run build:client",
+    "build:shared": "npm -w shared run build",
+    "build:server": "npm -w server run build",
+    "build:client": "npm -w client run build",
+    "start": "npm -w server run start",
+    "db:generate": "npm -w server run db:generate",
+    "db:migrate": "npm -w server run db:migrate",
+    "db:seed": "npm -w server run db:seed",
+    "test": "npm -w server run test && npm -w client run test",
+    "typecheck": "npm -w shared run typecheck && npm -w server run typecheck && npm -w client run typecheck"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

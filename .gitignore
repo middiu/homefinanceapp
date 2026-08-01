@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+client/dist/
+server/dist/
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+
+# SQLite data + backups
+*.sqlite
+*.sqlite3
+*.db
+data/
+backups/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor / OS cruft
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*.swo
+
+# Drizzle snapshot cache (keep migration SQL + meta journal committed)
+
+# Test coverage
+coverage/
+
+# TS build info
+*.tsbuildinfo

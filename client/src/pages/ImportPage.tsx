@@ -1,0 +1,226 @@
+import { useState } from 'react';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Select } from '@/components/ui/select';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Badge } from '@/components/ui/badge';
+import { Upload, Undo2, Save, FileUp } from 'lucide-react';
+import {
+  useListAccountsQuery,
+  useListImportBatchesQuery,
+  useDeleteImportBatchMutation,
+  useUploadImportMutation,
+  useCommitImportMutation,
+  useListMappingsQuery,
+  useCreateMappingMutation,
+  useDeleteMappingMutation,
+} from '@/app/api';
+import { PageHeader, EmptyState, Money } from '@/components/common';
+import { formatDate, formatAUD } from '@/lib/utils';
+import type { ImportFileFormat } from '@homefinance/shared';
+
+const FIELDS = ['date', 'description', 'amount', 'debit', 'credit', 'balance', 'reference'];
+
+export default function ImportPage() {
+  const { data: accounts } = useListAccountsQuery();
+  const { data: batches, refetch } = useListImportBatchesQuery();
+  const { data: mappings } = useListMappingsQuery();
+  const [deleteBatch] = useDeleteImportBatchMutation();
+  const [createMapping] = useCreateMappingMutation();
+  const [deleteMapping] = useDeleteMappingMutation();
+  const [upload] = useUploadImportMutation();
+  const [commit] = useCommitImportMutation();
+
+  const [accountId, setAccountId] = useState('');
+  const [format, setFormat] = useState<ImportFileFormat>('csv');
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<any>(null);
+  const [columnMap, setColumnMap] = useState<Record<string, string | null>>({});
+  const [mappingName, setMappingName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  async function doUpload() {
+    if (!file || !accountId) { setError('Select account and file'); return; }
+    setBusy(true); setError('');
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('accountId', accountId);
+      fd.append('format', format);
+      if (format === 'csv') fd.append('columnMap', JSON.stringify(columnMap));
+      const r: any = await upload(fd);
+      setPreview(r.data);
+      // prefill columnMap from headers if empty
+      if (format === 'csv' && Object.keys(columnMap).length === 0) {
+        const auto: Record<string, string | null> = {};
+        for (const f of FIELDS) {
+          const guess = (r.data.headers as string[]).find((h) => h.toLowerCase().includes(f === 'date' ? 'date' : f));
+          auto[f] = guess || null;
+        }
+        setColumnMap(auto);
+        // re-upload with mapping to get proper amounts
+        const fd2 = new FormData();
+        fd2.append('file', file);
+        fd2.append('accountId', accountId);
+        fd2.append('format', format);
+        fd2.append('columnMap', JSON.stringify(auto));
+        const r2: any = await upload(fd2);
+        setPreview(r2.data);
+      }
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function doCommit() {
+    if (!preview) return;
+    setBusy(true); setError('');
+    try {
+      const rows = preview.rows.map((r: any) => ({ date: r.date, description: r.description, amount: r.amount, balance: r.balance, isDuplicate: r.isDuplicate }));
+      await commit({ accountId, format, fileName: preview.fileName, rows, applyRules: true });
+      setPreview(null); setFile(null); setColumnMap({});
+      refetch();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div>
+      <PageHeader title="Import transactions" subtitle="Upload CSV, OFX, or QIF bank exports" />
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Card>
+          <CardHeader><CardTitle>1. Upload</CardTitle></CardHeader>
+          <CardContent className="space-y-3">
+            <div>
+              <Label>Account</Label>
+              <Select value={accountId} onChange={(e) => setAccountId(e.target.value)}>
+                <option value="">Select…</option>
+                {accounts?.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.type})</option>)}
+              </Select>
+            </div>
+            <div>
+              <Label>Format</Label>
+              <Select value={format} onChange={(e) => setFormat(e.target.value as ImportFileFormat)}>
+                <option value="csv">CSV</option>
+                <option value="ofx">OFX / QFX</option>
+                <option value="qif">QIF</option>
+              </Select>
+            </div>
+            <div>
+              <Label>File</Label>
+              <Input type="file" accept=".csv,.ofx,.qfx,.qif,.txt" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+            </div>
+            <Button onClick={doUpload} disabled={busy || !file || !accountId}>
+              <Upload className="h-4 w-4" /> {busy ? 'Working…' : 'Upload & preview'}
+            </Button>
+            {error && <p className="text-sm text-red-400">{error}</p>}
+          </CardContent>
+        </Card>
+
+        {format === 'csv' && (
+          <Card>
+            <CardHeader><CardTitle>2. Column mapping</CardTitle></CardHeader>
+            <CardContent className="space-y-2">
+              {!preview ? <EmptyState message="Upload a CSV to see columns." /> : (
+                <>
+                  {FIELDS.map((f) => (
+                    <div key={f} className="flex items-center gap-2">
+                      <Label className="w-24 capitalize">{f}</Label>
+                      <Select
+                        value={columnMap[f] ?? ''}
+                        onChange={(e) => setColumnMap({ ...columnMap, [f]: e.target.value || null })}
+                      >
+                        <option value="">— skip —</option>
+                        {(preview.headers as string[]).map((h: string) => <option key={h} value={h}>{h}</option>)}
+                      </Select>
+                    </div>
+                  ))}
+                  <Button variant="outline" size="sm" onClick={doUpload}>Re-apply mapping</Button>
+                  <div className="flex gap-2 pt-2">
+                    <Input placeholder="Template name" value={mappingName} onChange={(e) => setMappingName(e.target.value)} className="flex-1" />
+                    <Button variant="outline" size="sm" disabled={!mappingName} onClick={() => createMapping({ name: mappingName, accountId, format, columnMap, hasHeader: true })}>
+                      <Save className="h-4 w-4" /> Save
+                    </Button>
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
+        )}
+      </div>
+
+      {mappings && mappings.length > 0 && (
+        <Card className="mt-4">
+          <CardHeader><CardTitle>Saved mappings</CardTitle></CardHeader>
+          <CardContent className="flex flex-wrap gap-2">
+            {mappings.map((m: any) => (
+              <div key={m.id} className="flex items-center gap-2 rounded-md border border-border px-3 py-1.5 text-sm">
+                <span>{m.name}</span>
+                <Badge tone="muted">{m.format}</Badge>
+                <button onClick={() => { setFormat(m.format); setColumnMap(m.columnMap); if (m.accountId) setAccountId(m.accountId); }} className="text-primary hover:underline">Load</button>
+                <button onClick={() => deleteMapping(m.id)} className="text-muted-foreground hover:text-red-400">✕</button>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
+      {preview && (
+        <Card className="mt-4">
+          <CardHeader className="flex-row items-center justify-between">
+            <CardTitle>Preview ({preview.rows.length} rows)</CardTitle>
+            <Button onClick={doCommit} disabled={busy}><FileUp className="h-4 w-4" /> Commit import</Button>
+          </CardHeader>
+          <CardContent>
+            <div className="max-h-96 overflow-y-auto">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-card">
+                  <tr className="border-b text-left text-muted-foreground">
+                    <th className="p-1">Date</th><th className="p-1">Description</th><th className="p-1 text-right">Amount</th><th className="p-1">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {preview.rows.map((r: any, i: number) => (
+                    <tr key={i} className="border-b">
+                      <td className="p-1 whitespace-nowrap">{formatDate(r.date)}</td>
+                      <td className="p-1 truncate" title={r.description}>{r.description}</td>
+                      <td className="p-1 text-right"><Money amount={r.amount} /></td>
+                      <td className="p-1">{r.isDuplicate ? <Badge tone="warning">dup</Badge> : <Badge tone="muted">new</Badge>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      <Card className="mt-4">
+        <CardHeader><CardTitle>Import history</CardTitle></CardHeader>
+        <CardContent>
+          {(batches ?? []).length === 0 ? <EmptyState message="No imports yet" /> : (
+            <div className="space-y-1">
+              {(batches ?? []).map((b) => (
+                <div key={b.id} className="flex items-center justify-between border-b border-border py-2 text-sm last:border-0">
+                  <div>
+                    <div className="font-medium">{b.fileName}</div>
+                    <div className="text-xs text-muted-foreground">{formatDate(b.importedAt.slice(0, 10))} · {b.rowCount} rows · {b.duplicateCount} duplicates · <Badge tone="muted">{b.fileFormat}</Badge></div>
+                  </div>
+                  <Button variant="ghost" size="sm" onClick={() => deleteBatch(b.id)}><Undo2 className="h-4 w-4" /> Undo</Button>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
