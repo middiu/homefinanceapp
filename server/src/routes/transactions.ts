@@ -36,6 +36,7 @@ router.get('/', (req, res) => {
 const manualSchema = z.object({
   accountId: z.string(),
   date: z.string(),
+  time: z.string().nullish(),
   description: z.string().min(1),
   amount: z.number(),
   categoryId: z.string().nullish(),
@@ -57,6 +58,7 @@ router.put('/:id', (req, res) => {
       rawDescription: z.string().optional(),
       amount: z.number().optional(),
       date: z.string().optional(),
+      time: z.string().nullish().optional(),
       isTransfer: z.boolean().optional(),
       needsReview: z.boolean().optional(),
     })

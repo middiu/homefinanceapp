@@ -42,6 +42,12 @@ const DDL = [
     is_custom INTEGER NOT NULL DEFAULT 0,
     type TEXT
   )`,
+  `CREATE TABLE IF NOT EXISTS category_budgets (
+    id TEXT PRIMARY KEY,
+    category_id TEXT NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+    monthly_amount REAL NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  )`,
   `CREATE TABLE IF NOT EXISTS rules (
     id TEXT PRIMARY KEY,
     match_type TEXT NOT NULL,
@@ -65,6 +71,7 @@ const DDL = [
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     date TEXT NOT NULL,
+    time TEXT,
     description TEXT NOT NULL,
     raw_description TEXT,
     amount REAL NOT NULL,
@@ -169,6 +176,7 @@ const INDEX_DDL = [
   `CREATE INDEX IF NOT EXISTS idx_holdings_ticker ON investment_holdings(ticker)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_price_snapshot_ticker_date ON price_snapshots(ticker, snapshot_date)`,
   `CREATE INDEX IF NOT EXISTS idx_ai_catlog_batch ON ai_categorization_log(batch_id)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_budgets_category ON category_budgets(category_id)`,
 ];
 
 // Columns added in Phase 2 to pre-existing Phase 1 tables. Each is applied only if the
@@ -181,6 +189,8 @@ const MIGRATIONS: { table: string; column: string; ddl: string }[] = [
   { table: 'accounts', column: 'payment_due_day', ddl: `ALTER TABLE accounts ADD COLUMN payment_due_day INTEGER` },
   // categories — type (§7.3)
   { table: 'categories', column: 'type', ddl: `ALTER TABLE categories ADD COLUMN type TEXT` },
+  // categories — essential flag (essential vs discretionary)
+  { table: 'categories', column: 'essential', ddl: `ALTER TABLE categories ADD COLUMN essential INTEGER` },
   // rules — rule source / ai tracking / seed versioning (§3.3, §9.3)
   { table: 'rules', column: 'rule_source', ddl: `ALTER TABLE rules ADD COLUMN rule_source TEXT NOT NULL DEFAULT 'manual'` },
   { table: 'rules', column: 'updated_from_ai_at', ddl: `ALTER TABLE rules ADD COLUMN updated_from_ai_at TEXT` },
@@ -188,6 +198,8 @@ const MIGRATIONS: { table: string; column: string; ddl: string }[] = [
   // transactions — needs review + linked transfer (§2.3, §3.3)
   { table: 'transactions', column: 'linked_transaction_id', ddl: `ALTER TABLE transactions ADD COLUMN linked_transaction_id TEXT` },
   { table: 'transactions', column: 'needs_review', ddl: `ALTER TABLE transactions ADD COLUMN needs_review INTEGER NOT NULL DEFAULT 0` },
+  // transactions — optional time for tighter dedup (same-day identicals)
+  { table: 'transactions', column: 'time', ddl: `ALTER TABLE transactions ADD COLUMN time TEXT` },
   // import_batches — ai categorized count (§3.4)
   { table: 'import_batches', column: 'ai_categorized_count', ddl: `ALTER TABLE import_batches ADD COLUMN ai_categorized_count INTEGER NOT NULL DEFAULT 0` },
 ];

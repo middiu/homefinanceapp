@@ -1,14 +1,16 @@
 import { Router } from 'express';
 import multer from 'multer';
 import { z } from 'zod';
-import { eq, inArray } from 'drizzle-orm';
+import { eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import { getDb, schema } from '../db/index.js';
 import { getSqlite } from '../db/index.js';
-import { uid, dedupHash } from '../utils.js';
-import { parseFile, mapCsvRow, type ParsedRow } from '../services/parsers.js';
+import { uid, dedupHash, parseTime, round2 } from '../utils.js';
+import { parseFile, mapCsvRow, deriveOpeningBalance, type ParsedRow } from '../services/parsers.js';
+import { sum } from 'drizzle-orm';
 import { matchRule } from '../services/rules.js';
 import { categorizeBatch, estimateAiNeed, isAutoCategorizeEnabled } from '../services/ai.js';
 import { linkTransfers } from '../services/transfers.js';
+import { createJob, finishJob, failJob } from '../services/jobs.js';
 import type { ImportBatchDto, ImportFileFormat, ImportMappingDto } from '@homefinance/shared';
 
 const router = Router();
@@ -51,7 +53,7 @@ router.post('/upload', upload.single('file'), (req, res) => {
   const accountId = req.body.accountId as string;
   if (!accountId) return res.status(400).json({ error: 'accountId required' });
 
-  const hashes = rows.map((r) => (r.date ? dedupHash(accountId, r.date, r.amount, r.description) : ''));
+  const hashes = rows.map((r) => (r.date ? dedupHash(accountId, r.date, r.amount, r.description, r.time) : ''));
   const existing = new Set(
     db()
       .select({ h: schema.transactions.dedupHash })
@@ -64,12 +66,45 @@ router.post('/upload', upload.single('file'), (req, res) => {
   const preview = rows.map((r, i) => ({
     index: i,
     date: r.date,
+    time: r.time,
     description: r.description,
     amount: r.amount,
     balance: r.balance,
     isDuplicate: !!hashes[i] && existing.has(hashes[i]),
     categoryId: r.date ? matchRule(r.description, r.amount) : null, // suggested
   }));
+
+  // Opening-balance reconciliation (§): if the file exposes an opening balance
+  // (CSV running balance on the first row, or OFX LEDGERBAL), compare it to the
+  // account's current balance (opening + Σ existing txns). Flag a mismatch so
+  // the client can ask the user to adjust the opening balance or import as-is.
+  const fileOpening = deriveOpeningBalance(rows, parsed.closingBalance);
+  const account = db().select().from(schema.accounts).where(eq(schema.accounts.id, accountId)).get();
+  let balanceCheck: {
+    fileOpening: number | null;
+    accountBalance: number;
+    currentOpening: number;
+    delta: number;
+    mismatch: boolean;
+    suggestedOpening: number;
+  } | null = null;
+  if (fileOpening != null && account) {
+    const sumRow = db()
+      .select({ total: sum(schema.transactions.amount) })
+      .from(schema.transactions)
+      .where(eq(schema.transactions.accountId, accountId))
+      .get();
+    const accountBalance = round2((account.openingBalance ?? 0) + Number(sumRow?.total ?? 0));
+    const delta = round2(fileOpening - accountBalance);
+    balanceCheck = {
+      fileOpening,
+      accountBalance,
+      currentOpening: account.openingBalance ?? 0,
+      delta,
+      mismatch: Math.abs(delta) > 0.005,
+      suggestedOpening: round2((account.openingBalance ?? 0) + delta),
+    };
+  }
 
   res.json({
     format,
@@ -78,6 +113,7 @@ router.post('/upload', upload.single('file'), (req, res) => {
     accountId,
     fileName: req.file.originalname,
     columnMap,
+    balanceCheck,
   });
 });
 
@@ -100,6 +136,7 @@ const commitSchema = z.object({
   rows: z.array(
     z.object({
       date: z.string().nullable(),
+      time: z.string().nullish(),
       description: z.string(),
       amount: z.number(),
       balance: z.number().nullish(),
@@ -137,7 +174,8 @@ router.post('/commit', async (req, res) => {
 
     for (const r of rows) {
       if (!r.date) continue; // skip unparseable
-      const hash = dedupHash(accountId, r.date, r.amount, r.description);
+      const time = parseTime(r.time);
+      const hash = dedupHash(accountId, r.date, r.amount, r.description, time);
       const exists = d.select({ id: schema.transactions.id }).from(schema.transactions).where(eq(schema.transactions.dedupHash, hash)).get();
       if (exists) {
         duplicates++;
@@ -151,6 +189,7 @@ router.post('/commit', async (req, res) => {
           id,
           accountId,
           date: r.date,
+          time,
           description: r.description,
           rawDescription: r.description,
           amount: r.amount,
@@ -172,16 +211,26 @@ router.post('/commit', async (req, res) => {
   run();
 
   // Phase 2 §3.2 — AI auto-categorize any rows rules couldn't handle.
-  let aiCategorized = 0;
+  // Runs as a BACKGROUND JOB so the import response returns immediately after
+  // the (fast) DB inserts + transfer linking. AI categorization can take minutes
+  // on a large import (chat per 25-row batch); progress streams over SSE via the
+  // returned jobId. Records are already in the DB before this starts.
   const doAuto = parsed.data.autoCategorize !== undefined ? parsed.data.autoCategorize : isAutoCategorizeEnabled();
+  let jobId: string | undefined;
   if (doAuto && insertedIds.length) {
-    try {
-      const r = await categorizeBatch(insertedIds, batchId);
-      aiCategorized = r.categorized;
-    } catch (e) {
-      console.warn('[import] AI categorization failed (import still completes)', (e as Error).message);
-    }
-    d.update(schema.importBatches).set({ aiCategorizedCount: aiCategorized }).where(eq(schema.importBatches.id, batchId)).run();
+    const job = createJob('import-categorize', insertedIds.length);
+    jobId = job.id;
+    categorizeBatch(insertedIds, batchId, { jobId })
+      .then((r) => {
+        finishJob(job.id, r);
+        try {
+          getDb().update(schema.importBatches).set({ aiCategorizedCount: r.categorized }).where(eq(schema.importBatches.id, batchId)).run();
+        } catch { /* batch row may be gone */ }
+      })
+      .catch((e) => {
+        console.warn('[import] AI categorization failed (import already complete)', (e as Error).message);
+        failJob(job.id, (e as Error).message);
+      });
   }
 
   // Phase 2 §2 — detect transfer pairs (credit card <-> repayment) for this account's pairs.
@@ -191,7 +240,7 @@ router.post('/commit', async (req, res) => {
     console.warn('[import] transfer linking failed', (e as Error).message);
   }
 
-  res.status(201).json({ batchId, inserted, duplicates, aiCategorized, total: rows.length });
+  res.status(201).json({ batchId, inserted, duplicates, aiCategorized: 0, jobId, total: rows.length });
 });
 
 function mapBatch(r: typeof schema.importBatches.$inferSelect): ImportBatchDto {
@@ -209,6 +258,47 @@ function mapBatch(r: typeof schema.importBatches.$inferSelect): ImportBatchDto {
 
 router.get('/batches', (_req, res) => {
   res.json(db().select().from(schema.importBatches).all().sort((a, b) => b.importedAt.localeCompare(a.importedAt)).map(mapBatch));
+});
+
+// Wipe ALL imported data + history: every transaction that came from an import
+// (importBatchId IS NOT NULL) and every importBatches row. Manually-added
+// transactions, accounts, categories, rules, members, and settings are kept.
+// Guarded by `{ confirm: 'DELETE' }` — same pattern as DELETE /transactions.
+router.delete('/batches', (req, res) => {
+  const parsed = z.object({ confirm: z.literal('DELETE') }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Confirmation required: send { confirm: "DELETE" }' });
+  const d = db();
+  let deletedTransactions = 0;
+  let deletedBatches = 0;
+  getSqlite().transaction(() => {
+    // Ids of imported transactions (for audit-log cleanup + link cleanup).
+    const importedIds = d
+      .select({ id: schema.transactions.id })
+      .from(schema.transactions)
+      .where(isNotNull(schema.transactions.importBatchId))
+      .all()
+      .map((r) => r.id);
+    if (importedIds.length) {
+      d.delete(schema.aiCategorizationLog)
+        .where(inArray(schema.aiCategorizationLog.transactionId, importedIds))
+        .run();
+    }
+    const txRes = d.delete(schema.transactions)
+      .where(isNotNull(schema.transactions.importBatchId))
+      .run();
+    deletedTransactions = txRes.changes;
+    const batchRes = d.delete(schema.importBatches).run();
+    deletedBatches = batchRes.changes;
+    // Clear any transfer link refs now pointing at deleted imported txns
+    // (manual txn whose partner was an imported txn that just got removed).
+    d.update(schema.transactions)
+      .set({ isTransfer: false, linkedTransactionId: null })
+      .where(
+        sql`linked_transaction_id IS NOT NULL AND linked_transaction_id NOT IN (SELECT id FROM transactions)`,
+      )
+      .run();
+  })();
+  res.json({ deletedTransactions, deletedBatches });
 });
 
 // Undo an import batch: delete all transactions created in it.

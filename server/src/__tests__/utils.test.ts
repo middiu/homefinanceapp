@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseAmount, parseDate, dedupHash, round2 } from '../utils.js';
+import { parseAmount, parseDate, dedupHash, round2, parseTime } from '../utils.js';
 
 describe('parseAmount', () => {
   it('handles plain numbers and strings', () => {
@@ -70,6 +70,36 @@ describe('dedupHash', () => {
   });
   it('differs by account', () => {
     expect(dedupHash('a', '2026-07-01', 1, 'X')).not.toBe(dedupHash('b', '2026-07-01', 1, 'X'));
+  });
+  it('differs when time differs (same date/amount/description)', () => {
+    const hNone = dedupHash('a', '2026-07-01', -10, 'COLES');
+    const hEarly = dedupHash('a', '2026-07-01', -10, 'COLES', '09:00:00');
+    const hLate = dedupHash('a', '2026-07-01', -10, 'COLES', '17:30:00');
+    expect(hNone).not.toBe(hEarly);
+    expect(hEarly).not.toBe(hLate);
+  });
+  it('treats null and undefined time identically (date-only dedup unchanged)', () => {
+    expect(dedupHash('a', '2026-07-01', 1, 'X', null)).toBe(dedupHash('a', '2026-07-01', 1, 'X', undefined));
+    expect(dedupHash('a', '2026-07-01', 1, 'X', null)).toBe(dedupHash('a', '2026-07-01', 1, 'X'));
+  });
+});
+
+describe('parseTime', () => {
+  it('parses HH:mm and HH:mm:ss', () => {
+    expect(parseTime('10:30')).toBe('10:30:00');
+    expect(parseTime('10:30:45')).toBe('10:30:45');
+    expect(parseTime('9:05')).toBe('09:05:00');
+  });
+  it('parses OFX digit groups HHMM / HHMMSS', () => {
+    expect(parseTime('1030')).toBe('10:30:00');
+    expect(parseTime('103045')).toBe('10:30:45');
+  });
+  it('rejects garbage and out-of-range hours', () => {
+    expect(parseTime('')).toBeNull();
+    expect(parseTime(null)).toBeNull();
+    expect(parseTime('abc')).toBeNull();
+    expect(parseTime('25:00')).toBeNull();
+    expect(parseTime('9930')).toBeNull();
   });
 });
 

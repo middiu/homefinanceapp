@@ -44,6 +44,33 @@ export interface CategoryDto {
   parentId: string | null;
   isCustom: boolean;
   type: CategoryType | null; // Phase 2 §7.3
+  essential: boolean | null; // true = essential/need, false = discretionary/want, null = untagged
+}
+
+// Per-category monthly budget (spending plan).
+export interface BudgetDto {
+  categoryId: string;
+  categoryName: string;
+  monthlyAmount: number;
+}
+
+// Runtime-detected recurring subscription (computed on demand, not persisted).
+export interface SubscriptionDto {
+  description: string;
+  amount: number;
+  lastDate: string;
+  nextDate: string | null;
+  count: number;
+}
+
+// Runtime-detected spending anomaly (computed on demand, not persisted).
+export interface AnomalyDto {
+  id: string;
+  date: string;
+  description: string;
+  amount: number;
+  categoryId: string | null;
+  reason: string;
 }
 
 export interface RuleDto {
@@ -64,6 +91,7 @@ export interface TransactionDto {
   id: string;
   accountId: string;
   date: string; // ISO yyyy-mm-dd
+  time: string | null; // HH:mm:ss when the export carries a time, else null
   description: string;
   rawDescription: string | null;
   amount: number; // negative = expense, positive = income
@@ -232,6 +260,37 @@ export interface CategoryReport {
   rows: CategoryReportRow[];
   totals: { income: number; expense: number; net: number };
   monthly: { month: string; income: number; expense: number }[];
+}
+
+// Category analytics dashboard — single/multi-category slicing + drill-down.
+export interface CategoryAnalyticsCategoryRow {
+  categoryId: string;
+  name: string;
+  type: CategoryType | null;
+  expense: number;
+  income: number;
+  net: number;
+  prevExpense: number;
+  prevIncome: number;
+  deltaPct: number | null;
+  sharePct: number | null;
+}
+
+export interface CategoryAnalyticsMerchantRow {
+  description: string;
+  expense: number;
+  count: number;
+  sharePct: number | null;
+}
+
+export interface CategoryAnalytics {
+  period: { from: string; to: string; prevFrom: string; prevTo: string };
+  scope: { accountIds: string[] | null; memberId: string | null; categoryIds: string[] | null; includeIncome: boolean };
+  totals: { expense: number; income: number; net: number; prevExpense: number; prevIncome: number; deltaPct: number | null };
+  byCategory: CategoryAnalyticsCategoryRow[];
+  monthly: { month: string; expense: number; income: number }[];
+  byMonthCategory: { month: string; categories: Record<string, number> }[];
+  byMerchant: CategoryAnalyticsMerchantRow[];
 }
 
 // Phase 2 §8 — 12-month forecast report

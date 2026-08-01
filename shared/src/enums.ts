@@ -38,23 +38,27 @@ export const ACCOUNT_TYPE_LABELS: Record<AccountType, string> = {
 
 // Default category taxonomy (§3.3). Seed order defines default priority.
 // Phase 2 §7.3: each default category carries a `type`.
-export const DEFAULT_CATEGORIES: { name: string; type: CategoryType; subcategories?: string[] }[] = [
-  { name: 'Groceries', type: 'expense' },
-  { name: 'Dining & Takeaway', type: 'expense' },
-  { name: 'Entertainment', type: 'expense' },
-  { name: 'Health & Medical', type: 'expense' },
-  { name: 'Education', type: 'expense' },
-  { name: 'Utilities', type: 'expense' },
-  { name: 'Transport', type: 'expense' },
-  { name: 'Housing/Rent/Mortgage', type: 'expense' },
-  { name: 'Insurance', type: 'expense' },
-  { name: 'Shopping', type: 'expense' },
-  { name: 'Travel', type: 'expense' },
-  { name: 'Income', type: 'income' },
-  { name: 'Transfers', type: 'transfer' },
-  { name: 'Fees & Charges', type: 'expense' },
-  { name: 'Subscriptions', type: 'expense' },
-  { name: 'Other', type: 'expense' },
+// `essential`: true = need (non-negotiable), false = want (discretionary),
+// null = untagged/income/transfer. Drives the essential-vs-discretionary chart.
+export const DEFAULT_CATEGORIES: { name: string; type: CategoryType; essential?: boolean | null; subcategories?: string[] }[] = [
+  { name: 'Groceries', type: 'expense', essential: true },
+  { name: 'Dining & Takeaway', type: 'expense', essential: false },
+  { name: 'Entertainment', type: 'expense', essential: false },
+  { name: 'Health & Medical', type: 'expense', essential: true },
+  { name: 'Education', type: 'expense', essential: true },
+  { name: 'Utilities', type: 'expense', essential: true },
+  { name: 'Transport', type: 'expense', essential: true },
+  { name: 'Housing/Rent/Mortgage', type: 'expense', essential: true },
+  { name: 'Insurance', type: 'expense', essential: true },
+  { name: 'Shopping', type: 'expense', essential: false },
+  { name: 'Travel', type: 'expense', essential: false },
+  { name: 'Income', type: 'income', essential: null },
+  { name: 'Transfers', type: 'transfer', essential: null },
+  { name: 'Investment', type: 'transfer', essential: null },
+  { name: 'Credit Card Repayment', type: 'transfer', essential: null },
+  { name: 'Fees & Charges', type: 'expense', essential: true },
+  { name: 'Subscriptions', type: 'expense', essential: false },
+  { name: 'Other', type: 'expense', essential: null },
 ];
 
 // Cloud-hosted Ollama model allow-list (§5.2). The /models listing may include

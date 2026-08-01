@@ -3,10 +3,43 @@ import { randomUUID, createHash } from 'node:crypto';
 export const uid = () => randomUUID();
 
 // Dedup hash: account + ISO date + amount (2dp) + description (lowercased, trimmed)
-export function dedupHash(accountId: string, date: string, amount: number, description: string): string {
+// + optional time (HH:mm:ss) when the export carries one. Including time tightens
+// dedup so two legitimate identical transactions on the same day (same shop, same
+// price) are not collapsed — but only when time is available. Date-only exports
+// (time null/undefined) dedup exactly as before.
+export function dedupHash(accountId: string, date: string, amount: number, description: string, time?: string | null): string {
   const norm = description.trim().toLowerCase().replace(/\s+/g, ' ');
   const amt = amount.toFixed(2);
-  return createHash('sha256').update(`${accountId}|${date}|${amt}|${norm}`).digest('hex');
+  const t = time ? time.trim() : '';
+  return createHash('sha256').update(`${accountId}|${date}|${amt}|${norm}|${t}`).digest('hex');
+}
+
+// Parse a time string into HH:mm:ss (or HH:mm). Accepts "HH:mm", "HH:mm:ss",
+// "HHMM", "HHMMSS" (OFX DTPOSTED time portion). Returns null if unparseable
+// or out of range (hour > 23, minute/second > 59).
+export function parseTime(raw: unknown): string | null {
+  if (raw == null) return null;
+  let s = String(raw).trim();
+  if (!s) return null;
+  const valid = (h: number, mi: number, se: number) => h <= 23 && mi <= 59 && se <= 59;
+  // HH:mm or HH:mm:ss
+  let m = s.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (m) {
+    const h = parseInt(m[1], 10);
+    const mi = parseInt(m[2], 10);
+    const se = m[3] ? parseInt(m[3], 10) : 0;
+    if (!valid(h, mi, se)) return null;
+    return `${String(h).padStart(2, '0')}:${m[2]}:${m[3] ? m[3] : '00'}`;
+  }
+  // HHMM or HHMMSS (e.g. OFX time digits)
+  m = s.match(/^(\d{2})(\d{2})(\d{2})?$/);
+  if (m) {
+    const h = parseInt(m[1], 10);
+    const mi = parseInt(m[2], 10);
+    const se = m[3] ? parseInt(m[3], 10) : 0;
+    if (valid(h, mi, se)) return `${m[1]}:${m[2]}:${m[3] ? m[3] : '00'}`;
+  }
+  return null;
 }
 
 // AUD money formatting (en-AU). Returns plain number for DB; formatting done client-side.

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { ComposedChart, Bar, Line, LineChart, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
@@ -13,7 +13,7 @@ import { formatAUD, formatDate, monthLabel, pct } from '@/lib/utils';
 export default function ReportIncomeExpensePage() {
   const { data: accounts } = useListAccountsQuery();
   const { data: members } = useListMembersQuery();
-  const [preset, setPreset] = useState('thisMonth');
+  const [preset, setPreset] = useState('last12');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [accountId, setAccountId] = useState('');
@@ -23,6 +23,7 @@ export default function ReportIncomeExpensePage() {
     ? { preset, dateFrom, dateTo, accountId: accountId || undefined, memberId: memberId || undefined }
     : { preset, accountId: accountId || undefined, memberId: memberId || undefined };
   const { data, isLoading } = useGetIncomeExpenseReportQuery(params as any);
+  const savingsRate = data && data.totals.income > 0 ? Math.round((data.totals.net / data.totals.income) * 1000) / 10 : null;
 
   function exportCsv() {
     if (!data) return;
@@ -75,10 +76,16 @@ export default function ReportIncomeExpensePage() {
             <span>Prev {formatDate(data.period.prevFrom)} – {formatDate(data.period.prevTo)}</span>
           </div>
 
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
             <Card className="p-4"><div className="text-xs uppercase text-muted-foreground">Income</div><div className="mt-1 text-2xl font-bold text-emerald-400">{formatAUD(data.totals.income)}</div></Card>
             <Card className="p-4"><div className="text-xs uppercase text-muted-foreground">Expense</div><div className="mt-1 text-2xl font-bold text-red-400">{formatAUD(data.totals.expense)}</div></Card>
             <Card className="p-4"><div className="text-xs uppercase text-muted-foreground">Net</div><div className={`mt-1 text-2xl font-bold ${data.totals.net >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{formatAUD(data.totals.net)}</div></Card>
+            <Card className="p-4">
+              <div className="text-xs uppercase text-muted-foreground">Savings rate</div>
+              <div className={`mt-1 text-2xl font-bold ${savingsRate != null && savingsRate >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                {savingsRate == null ? '—' : pct(savingsRate)}
+              </div>
+            </Card>
           </div>
 
           <Card className="mt-4">
@@ -86,7 +93,7 @@ export default function ReportIncomeExpensePage() {
             <CardContent>
               {data.monthly.length === 0 ? <EmptyState message="No data in period" /> : (
                 <ResponsiveContainer width="100%" height={280}>
-                  <ComposedChart data={data.monthly.map((m) => ({ month: monthLabel(m.month), Income: m.income, Expense: m.expense }))}>
+                  <ComposedChart data={data.monthly.map((m) => ({ month: monthLabel(m.month), Income: m.income, Expense: m.expense, Net: m.income - m.expense }))}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#333" vertical={false} />
                     <XAxis dataKey="month" tick={{ fontSize: 11 }} />
                     <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} />
@@ -94,8 +101,25 @@ export default function ReportIncomeExpensePage() {
                     <Legend wrapperStyle={{ fontSize: 11 }} />
                     <Bar dataKey="Income" fill="#10b981" />
                     <Bar dataKey="Expense" fill="#ef4444" />
-                    <Line dataKey="Income" stroke="#10b981" type="monotone" dot={false} />
+                    <Line dataKey="Net" stroke="#3b82f6" type="monotone" dot={false} strokeWidth={2} />
                   </ComposedChart>
+                </ResponsiveContainer>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="mt-4">
+            <CardHeader><CardTitle>Savings rate over time</CardTitle><CardDescription>Monthly (income − expense) ÷ income</CardDescription></CardHeader>
+            <CardContent>
+              {data.monthly.length === 0 ? <EmptyState message="No data in period" /> : (
+                <ResponsiveContainer width="100%" height={240}>
+                  <LineChart data={data.monthly.map((m) => ({ month: monthLabel(m.month), rate: m.income > 0 ? Math.round(((m.income - m.expense) / m.income) * 1000) / 10 : null }))}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#333" vertical={false} />
+                    <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+                    <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `${v}%`} />
+                    <Tooltip formatter={(v: any) => (v == null ? '—' : `${Number(v)}%`)} />
+                    <Line dataKey="rate" stroke="#10b981" type="monotone" strokeWidth={2} dot={{ r: 3 }} connectNulls />
+                  </LineChart>
                 </ResponsiveContainer>
               )}
             </CardContent>

@@ -25,58 +25,69 @@ interface TxRow {
   isTransfer: boolean;
 }
 
-/** Detect + persist transfer links for all credit-card <-> repayment-account pairs.
+/** Detect + persist transfer links for credit-card <-> repayment-account pairs and
+ *  investment-account <-> funding-account pairs. In both shapes credits land on the
+ *  "destination" account (card payment received / investment deposit) and the matching
+ *  debits leave the linked source account (repayment / funding). The link is declared
+ *  on the destination account via `linkedRepaymentAccountId`.
  *  Returns the number of newly-linked pairs. Safe to call repeatedly (idempotent). */
 export function linkTransfers(): number {
   const d = getDb();
   const accts = d.select().from(schema.accounts).all();
-  const cards = accts.filter((a) => a.type === 'credit_card' && a.linkedRepaymentAccountId);
+  const dests = accts.filter(
+    (a) => (a.type === 'credit_card' || a.type === 'investment') && a.linkedRepaymentAccountId,
+  );
+  // Shared so a single source-side debit is consumed by at most one destination
+  // (e.g. one savings account funding both a card and an investment account).
+  const usedSource = new Set<string>();
+  const usedDest = new Set<string>();
   let linked = 0;
-  for (const card of cards) {
-    const repayId = card.linkedRepaymentAccountId!;
-    linked += linkPair(d, card.id, repayId, card.name, accts.find((a) => a.id === repayId)?.name || '');
+  for (const dest of dests) {
+    const sourceId = dest.linkedRepaymentAccountId!;
+    linked += linkPair(d, dest.id, sourceId, dest.name, usedSource, usedDest);
   }
   return linked;
 }
 
 function linkPair(
   d: ReturnType<typeof getDb>,
-  cardId: string,
-  repayId: string,
-  cardName: string,
-  repayName: string,
+  destId: string,
+  sourceId: string,
+  destName: string,
+  usedSource: Set<string>,
+  usedDest: Set<string>,
 ): number {
-  const cardTxns = d.select().from(schema.transactions).where(eq(schema.transactions.accountId, cardId)).all() as TxRow[];
-  const repayTxns = d.select().from(schema.transactions).where(eq(schema.transactions.accountId, repayId)).all() as TxRow[];
+  const destTxns = d.select().from(schema.transactions).where(eq(schema.transactions.accountId, destId)).all() as TxRow[];
+  const sourceTxns = d.select().from(schema.transactions).where(eq(schema.transactions.accountId, sourceId)).all() as TxRow[];
 
-  // Candidates on the repayment account: debits (money leaving to pay the card).
-  const repayCandidates = repayTxns.filter((t) => t.amount < 0 && !t.isTransfer);
-  // Candidates on the card: credits (a payment received reduces card debt => positive amount).
-  const cardCandidates = cardTxns.filter((t) => t.amount > 0 && !t.isTransfer);
+  // Source-side candidates: debits (money leaving to pay the card / fund the investment).
+  const sourceCandidates = sourceTxns.filter((t) => t.amount < 0 && !t.isTransfer && !usedSource.has(t.id));
+  // Destination-side candidates: credits (payment received / deposit arriving => positive amount).
+  const destCandidates = destTxns.filter((t) => t.amount > 0 && !t.isTransfer && !usedDest.has(t.id));
 
   let linked = 0;
-  const usedCard = new Set<string>();
 
-  for (const r of repayCandidates) {
-    // Description hint: does this repayment reference the card?
-    const hintsCard = BPAY_PATTERNS.some((p) => p.test(r.description)) || r.description.toLowerCase().includes(cardName.toLowerCase());
-    // Find best card-side match: same date (±2 days), amount within $1, prefer description hint.
+  for (const r of sourceCandidates) {
+    // Description hint: does this debit reference the destination account?
+    const hintsDest = BPAY_PATTERNS.some((p) => p.test(r.description)) || r.description.toLowerCase().includes(destName.toLowerCase());
+    // Find best destination-side match: same date (±2 days), amount within $1, prefer description hint.
     let best: TxRow | null = null;
     let bestScore = Infinity;
-    for (const c of cardCandidates) {
-      if (usedCard.has(c.id)) continue;
+    for (const c of destCandidates) {
+      if (usedDest.has(c.id)) continue;
       const dayDiff = Math.abs(daysBetween(r.date, c.date));
       const amtDiff = Math.abs(Math.abs(r.amount) - Math.abs(c.amount));
       if (dayDiff > 2) continue;
       if (amtDiff > 1) continue;
-      const score = dayDiff * 10 + amtDiff + (hintsCard ? 0 : 100);
+      const score = dayDiff * 10 + amtDiff + (hintsDest ? 0 : 100);
       if (score < bestScore) {
         bestScore = score;
         best = c;
       }
     }
     if (best) {
-      usedCard.add(best.id);
+      usedSource.add(r.id);
+      usedDest.add(best.id);
       pair(d, r, best);
       linked++;
     }

@@ -40,6 +40,18 @@ curl -s http://localhost:4000/api/ai/status   # smoke-test API
 
 Do **not** run `podman compose down -v` or `podman volume rm homefinance-db` — the `-v`/volume-rm flags delete the DB volume. A plain `down` is safe (volumes untouched). The host `./data/` path is local-dev only and is never read by the container.
 
+**After any code change**, rebuild the container so the running image matches the repo (typecheck + tests first, then rebuild):
+
+```bash
+npm run build:shared && npm run typecheck && npm run test
+podman compose up --build -d     # rebuild image, recreate container, KEEP volumes + data
+podman image prune -f            # remove dangling <none> images left from the old build
+podman ps                         # verify Up
+curl -s http://localhost:4000/api/ai/status   # smoke-test API
+```
+
+`podman image prune -f` drops the dangling intermediate/old-tagged images (the `<none>:<none>` entries from prior builds) — it does **not** touch the current `homefinance-homefinance:latest` image, the `node` base image, or any volume. Run it after every rebuild so stale images don't accumulate on disk.
+
 ## Architecture
 
 npm workspaces monorepo: `client/`, `server/`, `shared/`.
@@ -64,7 +76,9 @@ The AI provider is a **remote cloud service** (Ollama Cloud by default). Only th
 
 Transfers (`isTransfer`) are **skipped for AI** in re-categorize — their memos may carry recipient names/bank strings and they need no merchant identification. On import, transfers are linked post-import so AI runs first; sanitization removes the banking digits, and the residual merchant/recipient words are the irreducible minimum for usefulness. `apiKey` is server-side only and never sent to the client.
 
-**Dedup:** `dedupHash = hash(accountId + date + amount + description)` on every transaction; import commit skips rows whose hash already exists.
+**Dedup:** `dedupHash = hash(accountId + date + amount + description + optional time)` on every transaction; import commit skips rows whose hash already exists. `time` (nullable `HH:mm:ss`) is extracted when the export carries it — OFX `DTPOSTED` digits after the date, a mapped CSV `time` column — via `parseTime()`, which normalizes `9:30`/`1030` → `09:30:00` and rejects out-of-range values. Including time tightens dedup so two legitimate identical same-day transactions (same shop, same price) are not collapsed. Date-only exports (time null) dedup exactly as before; `null` and `undefined` time hash identically. Manual `createManual` normalizes through `parseTime` too, so a hand-entered `09:00` and an imported `09:00:00` match.
+
+**Opening-balance reconciliation on import:** when the file exposes an opening balance — CSV running-balance on the first row (`balance − amount`), or OFX `<LEDGERBAL>` (closing balance, via `deriveOpeningBalance(rows, closingBalance)` = closing − Σ amounts) — the `/imports/upload` preview compares it to the account's current balance (`opening + Σ existing txns`) and returns a `balanceCheck` (`fileOpening`, `accountBalance`, `delta`, `mismatch`, `suggestedOpening`). On mismatch the client (`ImportPage`) blocks commit and prompts: **update the account's opening balance** (PUT `/accounts/:id` with `suggestedOpening = currentOpening + delta`, so the account reconciles with the statement), **import as-is**, or **cancel**. Files with no balance info (QIF, CSV without a balance column) skip the check.
 
 ### Ownership split
 
@@ -74,7 +88,7 @@ Transfers (`isTransfer`) are **skipped for AI** in re-categorize — their memos
 
 `services/ai.ts` uses the **official `ollama` (ollama-js) client** against an Ollama host (Ollama Cloud `https://ollama.com` default, or local/remote Ollama). `normalizeHost()` strips `/v1` so legacy `https://ollama.com/v1` config still works — the native `/api/chat` endpoint is used, *not* the OpenAI-compatible `/v1`. `aiWebSearch()` uses `ollama.webSearch()` (hosted at ollama.com, requires API key) for merchant lookup during categorization. Provider config (baseUrl, model, apiKey, enabled, autoCategorize) lives in the `settings` table, falling back to env (`config.ai`); **apiKey is never sent to the client**.
 
-Long-running AI ops (insight, forecast, forecast-report, re-categorize) run as **jobs** (`services/jobs.ts`, in-memory registry + EventEmitter). The route returns `{jobId}` (HTTP 202) immediately; progress streams over SSE at `GET /api/ai/jobs/:id/events` (also pollable at `GET /api/ai/jobs/:id`). Client subscribes via `useJobProgress` + `<JobProgressModal>`. Jobs are ephemeral — a restart drops them (acceptable for single-user self-hosted). Forecast arithmetic is statistical server-side; AI only narrates — it never generates the numbers.
+Long-running AI ops (insight, forecast, forecast-report, re-categorize, **import auto-categorize**) run as **jobs** (`services/jobs.ts`, in-memory registry + EventEmitter). The route returns `{jobId}` (HTTP 202) immediately; progress streams over SSE at `GET /api/ai/jobs/:id/events` (also pollable at `GET /api/ai/jobs/:id`). Client subscribes via `useJobProgress` + `<JobProgressModal>`. Import `/commit` returns `{batchId, inserted, duplicates, jobId?, total}` (HTTP 201) — the DB inserts + transfer linking complete synchronously and the records exist before the response is sent; when AI auto-categorize is on and there are unmatched rows, `jobId` is set and categorization continues in the background so the client isn't blocked. Jobs are ephemeral — a restart drops them (acceptable for single-user self-hosted). Forecast arithmetic is statistical server-side; AI only narrates — it never generates the numbers.
 
 ### Key conventions
 

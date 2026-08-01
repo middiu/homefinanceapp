@@ -2,7 +2,14 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { getDb, schema } from '../db/index.js';
 import { ownershipMap } from '../services/transactions.js';
-import type { CategoryReport, CategoryReportRow, CategoryType } from '@homefinance/shared';
+import type {
+  CategoryAnalytics,
+  CategoryAnalyticsCategoryRow,
+  CategoryAnalyticsMerchantRow,
+  CategoryReport,
+  CategoryReportRow,
+  CategoryType,
+} from '@homefinance/shared';
 
 const router = Router();
 const db = () => getDb();
@@ -63,7 +70,13 @@ router.get('/income-expense-by-category', (req, res) => {
   const prev = { from: iso(prevFrom), to: iso(prevEnd) };
 
   const d = getDb();
-  let txns = d.select().from(schema.transactions).all().filter((t) => !t.isTransfer);
+  const cats = d.select().from(schema.categories).all();
+  const catById = new Map(cats.map((c) => [c.id, c]));
+  const transferCatIds = new Set(cats.filter((c) => c.type === 'transfer').map((c) => c.id));
+  let txns = d.select()
+    .from(schema.transactions)
+    .all()
+    .filter((t) => !t.isTransfer && !(t.categoryId != null && transferCatIds.has(t.categoryId)));
   if (accountId) txns = txns.filter((t) => t.accountId === accountId);
   if (memberId) {
     const own = ownershipMap();
@@ -71,8 +84,6 @@ router.get('/income-expense-by-category', (req, res) => {
     for (const [acct, members] of own) if (members.has(memberId)) memberAccts.add(acct);
     txns = txns.filter((t) => memberAccts.has(t.accountId));
   }
-  const cats = d.select().from(schema.categories).all();
-  const catById = new Map(cats.map((c) => [c.id, c]));
 
   const inRange = (date: string, from: string, to: string) => date >= from && date <= to;
   const cur = new Map<string, { income: number; expense: number }>();
@@ -80,11 +91,13 @@ router.get('/income-expense-by-category', (req, res) => {
   const monthly = new Map<string, { income: number; expense: number }>();
 
   for (const t of txns) {
-    const m = t.date.slice(0, 7);
-    if (!monthly.has(m)) monthly.set(m, { income: 0, expense: 0 });
-    const me = monthly.get(m)!;
     const catKey = t.categoryId || 'uncategorized';
     if (inRange(t.date, period.from, period.to)) {
+      // Monthly trend tracks only the report (current) period so past months
+      // are populated and no zero-filled prev-period months leak into the chart.
+      const m = t.date.slice(0, 7);
+      if (!monthly.has(m)) monthly.set(m, { income: 0, expense: 0 });
+      const me = monthly.get(m)!;
       if (!cur.has(catKey)) cur.set(catKey, { income: 0, expense: 0 });
       const e = cur.get(catKey)!;
       if (t.amount < 0) { e.expense += -t.amount; me.expense += -t.amount; }
@@ -136,5 +149,185 @@ router.get('/income-expense-by-category', (req, res) => {
 function iso(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
+
+// ---- Category analytics dashboard ----
+// Single/multi-category slicing with period-over-period comparison, monthly
+// trend (per-category for stacked/line/area), and merchant (description)
+// drill-down. In-memory aggregation, consistent with /dashboards and the
+// income-expense report above.
+const analyticsSchema = scopeSchema.extend({
+  categoryId: z.union([z.string(), z.array(z.string())]).optional(),
+  includeIncome: z.string().optional(),
+});
+
+router.get('/category-analytics', (req, res) => {
+  const parsed = analyticsSchema.safeParse(req.query);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const { preset, accountId, memberId } = parsed.data;
+  const period = resolvePeriod(preset, parsed.data.dateFrom, parsed.data.dateTo);
+
+  // Normalize categoryId to string[] (accepts "id", "id,id", or ["id"]).
+  let categoryIds: string[] = [];
+  const rawCat = (parsed.data as any).categoryId;
+  if (typeof rawCat === 'string') categoryIds = rawCat.split(',').map((s) => s.trim()).filter(Boolean);
+  else if (Array.isArray(rawCat)) categoryIds = rawCat.filter(Boolean);
+  const includeIncome = String(parsed.data.includeIncome ?? 'false') === 'true';
+
+  // Previous period of the same length.
+  const days = Math.round((new Date(period.to).getTime() - new Date(period.from).getTime()) / 86400000) + 1;
+  const prevEnd = new Date(new Date(period.from).getTime() - 86400000);
+  const prevFrom = new Date(prevEnd.getTime() - (days - 1) * 86400000);
+  const prev = { from: iso(prevFrom), to: iso(prevEnd) };
+
+  const d = getDb();
+  const cats = d.select().from(schema.categories).all();
+  const catById = new Map(cats.map((c) => [c.id, c]));
+  const catName = (id: string | null) => (id && catById.get(id)?.name) || 'Uncategorized';
+  const catType = (id: string | null): CategoryType | null => {
+    if (!id) return null;
+    return (catById.get(id)?.type as CategoryType) ?? null;
+  };
+  const transferCatIds = new Set(cats.filter((c) => c.type === 'transfer').map((c) => c.id));
+  const selectedCats = new Set(categoryIds);
+  const hasCatFilter = selectedCats.size > 0;
+  // Transfer-like (isTransfer flag OR transfer-type category) is excluded from
+  // the default spend view, UNLESS its category is explicitly selected — so
+  // picking Investment / Credit Card Repayment reveals those movements.
+  const transferLike = (t: { isTransfer: boolean; categoryId: string | null }) =>
+    t.isTransfer || (t.categoryId != null && transferCatIds.has(t.categoryId));
+  const excluded = (t: { isTransfer: boolean; categoryId: string | null }) =>
+    transferLike(t) && !(t.categoryId != null && selectedCats.has(t.categoryId));
+  let txns = d.select().from(schema.transactions).all().filter((t) => !excluded(t));
+  if (hasCatFilter) {
+    txns = txns.filter((t) => (t.categoryId ? selectedCats.has(t.categoryId) : false));
+  }
+
+  // Account scope: memberId → ownership-weighted share; accountId → single at
+  // 100%; otherwise all accounts at 100%.
+  const scopePct = new Map<string, number>();
+  const scopedAccountIds: string[] | null = accountId ? [accountId] : null;
+  if (memberId) {
+    const own = ownershipMap();
+    const accts = d.select().from(schema.accounts).all();
+    for (const a of accts) {
+      const p = own.get(a.id)?.get(memberId) || 0;
+      if (p > 0) scopePct.set(a.id, p);
+    }
+    txns = txns.filter((t) => scopePct.has(t.accountId));
+  } else if (accountId) {
+    scopePct.set(accountId, 100);
+    txns = txns.filter((t) => t.accountId === accountId);
+  }
+  const shareOf = (t: { amount: number; accountId: string }) =>
+    (t.amount * (scopePct.get(t.accountId) || 100)) / 100;
+
+  const inRange = (date: string, from: string, to: string) => date >= from && date <= to;
+  const cur = new Map<string, { expense: number; income: number }>();
+  const prevMap = new Map<string, { expense: number; income: number }>();
+  const monthly = new Map<string, { expense: number; income: number }>();
+  const byMonthCat = new Map<string, Map<string, number>>(); // month -> catName -> expense
+  const byMerchant = new Map<string, { expense: number; count: number }>();
+
+  for (const t of txns) {
+    const catKey = t.categoryId || 'uncategorized';
+    const sh = shareOf(t);
+    if (inRange(t.date, period.from, period.to)) {
+      const m = t.date.slice(0, 7);
+      if (!monthly.has(m)) monthly.set(m, { expense: 0, income: 0 });
+      const me = monthly.get(m)!;
+      if (!cur.has(catKey)) cur.set(catKey, { expense: 0, income: 0 });
+      const e = cur.get(catKey)!;
+      if (t.amount < 0) {
+        const exp = -sh;
+        e.expense += exp; me.expense += exp;
+        const cn = catName(t.categoryId);
+        if (!byMonthCat.has(m)) byMonthCat.set(m, new Map());
+        byMonthCat.get(m)!.set(cn, (byMonthCat.get(m)!.get(cn) || 0) + exp);
+        const mk = t.description;
+        const mer = byMerchant.get(mk) || { expense: 0, count: 0 };
+        mer.expense += exp; mer.count += 1;
+        byMerchant.set(mk, mer);
+      } else {
+        e.income += sh; me.income += sh;
+      }
+    } else if (inRange(t.date, prev.from, prev.to)) {
+      if (!prevMap.has(catKey)) prevMap.set(catKey, { expense: 0, income: 0 });
+      const e = prevMap.get(catKey)!;
+      if (t.amount < 0) e.expense += -sh;
+      else e.income += sh;
+    }
+  }
+
+  const curExpenseTotal = [...cur.values()].reduce((s, v) => s + v.expense, 0);
+  const curIncomeTotal = [...cur.values()].reduce((s, v) => s + v.income, 0);
+  const prevExpenseTotal = [...prevMap.values()].reduce((s, v) => s + v.expense, 0);
+  const prevIncomeTotal = [...prevMap.values()].reduce((s, v) => s + v.income, 0);
+
+  const byCategory: CategoryAnalyticsCategoryRow[] = [];
+  const allKeys = new Set([...cur.keys(), ...prevMap.keys()]);
+  for (const key of allKeys) {
+    const c = cur.get(key) || { expense: 0, income: 0 };
+    const p = prevMap.get(key) || { expense: 0, income: 0 };
+    const net = c.income - c.expense;
+    const prevNet = p.income - p.expense;
+    const deltaPct = prevNet === 0 ? null : Math.round(((net - prevNet) / Math.abs(prevNet)) * 1000) / 10;
+    byCategory.push({
+      categoryId: key,
+      name: catName(key === 'uncategorized' ? null : key),
+      type: catType(key === 'uncategorized' ? null : key),
+      expense: round2(c.expense),
+      income: round2(c.income),
+      net: round2(net),
+      prevExpense: round2(p.expense),
+      prevIncome: round2(p.income),
+      deltaPct,
+      sharePct: curExpenseTotal === 0 ? null : Math.round((c.expense / curExpenseTotal) * 1000) / 10,
+    });
+  }
+  byCategory.sort((a, b) => b.expense - a.expense || b.income - a.income);
+
+  const byMerchantRows: CategoryAnalyticsMerchantRow[] = [...byMerchant.entries()]
+    .map(([description, v]) => ({
+      description,
+      expense: round2(v.expense),
+      count: v.count,
+      sharePct: curExpenseTotal === 0 ? null : Math.round((v.expense / curExpenseTotal) * 1000) / 10,
+    }))
+    .sort((a, b) => b.expense - a.expense)
+    .slice(0, 15);
+
+  const monthlyArr = [...monthly.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([month, v]) => ({ month, expense: round2(v.expense), income: round2(v.income) }));
+
+  const byMonthCategoryArr = [...byMonthCat.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([month, cats2]) => ({
+      month,
+      categories: Object.fromEntries([...cats2.entries()].map(([k, v]) => [k, round2(v)])),
+    }));
+
+  const totalsDeltaPct = prevExpenseTotal === 0
+    ? null
+    : Math.round(((curExpenseTotal - prevExpenseTotal) / Math.abs(prevExpenseTotal)) * 1000) / 10;
+
+  const report: CategoryAnalytics = {
+    period: { from: period.from, to: period.to, prevFrom: prev.from, prevTo: prev.to },
+    scope: { accountIds: scopedAccountIds, memberId: memberId ?? null, categoryIds: hasCatFilter ? categoryIds : null, includeIncome },
+    totals: {
+      expense: round2(curExpenseTotal),
+      income: round2(curIncomeTotal),
+      net: round2(curIncomeTotal - curExpenseTotal),
+      prevExpense: round2(prevExpenseTotal),
+      prevIncome: round2(prevIncomeTotal),
+      deltaPct: totalsDeltaPct,
+    },
+    byCategory,
+    monthly: monthlyArr,
+    byMonthCategory: byMonthCategoryArr,
+    byMerchant: byMerchantRows,
+  };
+  res.json(report);
+});
 
 export default router;

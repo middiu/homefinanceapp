@@ -1,7 +1,7 @@
 import { SQL, and, eq, gte, lte, like, or, desc, asc, sql } from 'drizzle-orm';
 import { getDb, schema, getSqlite } from '../db/index.js';
 import type { TransactionFilter, TransactionDto, PagedResult, CategorySource } from '@homefinance/shared';
-import { uid, dedupHash, nowISO } from '../utils.js';
+import { uid, dedupHash, nowISO, parseTime } from '../utils.js';
 import { matchRule } from './rules.js';
 
 export function mapTx(r: typeof schema.transactions.$inferSelect): TransactionDto {
@@ -9,6 +9,7 @@ export function mapTx(r: typeof schema.transactions.$inferSelect): TransactionDt
     id: r.id,
     accountId: r.accountId,
     date: r.date,
+    time: r.time,
     description: r.description,
     rawDescription: r.rawDescription,
     amount: r.amount,
@@ -113,6 +114,7 @@ export function paged(filter: TransactionFilter): PagedResult<TransactionDto & {
 export function createManual(input: {
   accountId: string;
   date: string;
+  time?: string | null;
   description: string;
   amount: number;
   categoryId?: string | null;
@@ -120,13 +122,15 @@ export function createManual(input: {
 }): TransactionDto {
   const d = getDb();
   const id = uid();
-  const hash = dedupHash(input.accountId, input.date, input.amount, input.description);
+  const time = parseTime(input.time ?? null);
+  const hash = dedupHash(input.accountId, input.date, input.amount, input.description, time);
   const r = d
     .insert(schema.transactions)
     .values({
       id,
       accountId: input.accountId,
       date: input.date,
+      time,
       description: input.description,
       rawDescription: input.description,
       amount: input.amount,

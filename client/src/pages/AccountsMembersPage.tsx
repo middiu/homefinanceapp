@@ -64,6 +64,7 @@ function AccountsTab() {
                   <div className="text-xs text-muted-foreground">
                     {a.institution} · {a.type} · open {formatAUD(a.openingBalance)}
                     {a.type === 'credit_card' && a.linkedRepaymentAccountId && <> · pays from {data?.find((x) => x.id === a.linkedRepaymentAccountId)?.name ?? '?'}</>}
+                    {a.type === 'investment' && a.linkedRepaymentAccountId && <> · funded from {data?.find((x) => x.id === a.linkedRepaymentAccountId)?.name ?? '?'}</>}
                   </div>
                   <div className="mt-0.5 flex flex-wrap gap-1">
                     {a.ownership.map((o) => {
@@ -111,7 +112,9 @@ function AccountDialog({ accounts, members, initial, onClose, onSave }: { accoun
   const [ownership, setOwnership] = useState<OwnershipDto[]>(initial.ownership ?? []);
   const sum = ownership.reduce((s, o) => s + (Number(o.percentage) || 0), 0);
   const isCc = f.type === 'credit_card';
-  const repaymentOptions = accounts.filter((a) => a.id !== initial.id && a.type !== 'credit_card');
+  const isInv = f.type === 'investment';
+  const hasLink = isCc || isInv; // both pair with a funding/repayment source account
+  const linkedOptions = accounts.filter((a) => a.id !== initial.id && a.type !== 'credit_card');
   const valid = Math.abs(sum - 100) < 0.01 && f.name && ownership.every((o) => o.memberId) && (!isCc || f.linkedRepaymentAccountId);
 
   return (
@@ -125,21 +128,27 @@ function AccountDialog({ accounts, members, initial, onClose, onSave }: { accoun
           <div><Label>Type</Label><Select value={f.type} onChange={(e) => setF({ ...f, type: e.target.value })}><option value="transaction">Transaction</option><option value="savings">Savings</option><option value="credit_card">Credit Card</option><option value="loan">Loan</option><option value="investment">Investment</option></Select></div>
           <div><Label>Opening balance</Label><Input type="number" step="0.01" value={f.openingBalance} onChange={(e) => setF({ ...f, openingBalance: e.target.value })} /></div>
         </div>
-        {isCc && (
+        {hasLink && (
           <div className="mt-3 rounded-md border border-border p-3">
-            <div className="mb-2 text-sm font-medium">Credit card settings</div>
+            <div className="mb-2 text-sm font-medium">{isCc ? 'Credit card settings' : 'Investment settings'}</div>
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="sm:col-span-2">
-                <Label>Linked repayment account (required)</Label>
+                <Label>{isCc ? 'Linked repayment account (required)' : 'Funding account (optional)'}</Label>
                 <Select value={f.linkedRepaymentAccountId ?? ''} onChange={(e) => setF({ ...f, linkedRepaymentAccountId: e.target.value })}>
-                  <option value="">Select repayment account…</option>
-                  {repaymentOptions.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.type})</option>)}
+                  <option value="">{isCc ? 'Select repayment account…' : 'Select funding account…'}</option>
+                  {linkedOptions.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.type})</option>)}
                 </Select>
-                <p className="mt-1 text-xs text-muted-foreground">Transfers between this card and the linked account are auto-detected and excluded from spend.</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {isCc
+                    ? 'Transfers between this card and the linked account are auto-detected and excluded from spend.'
+                    : 'Deposits arriving here from the funding account are auto-matched and excluded from spend.'}
+                </p>
               </div>
-              <div><Label>Credit limit (AUD)</Label><Input type="number" step="0.01" value={f.creditLimit ?? ''} onChange={(e) => setF({ ...f, creditLimit: e.target.value })} /></div>
-              <div><Label>Statement closing day (1-31)</Label><Input type="number" min={1} max={31} value={f.statementClosingDay ?? ''} onChange={(e) => setF({ ...f, statementClosingDay: e.target.value })} /></div>
-              <div><Label>Payment due day (1-31)</Label><Input type="number" min={1} max={31} value={f.paymentDueDay ?? ''} onChange={(e) => setF({ ...f, paymentDueDay: e.target.value })} /></div>
+              {isCc && <>
+                <div><Label>Credit limit (AUD)</Label><Input type="number" step="0.01" value={f.creditLimit ?? ''} onChange={(e) => setF({ ...f, creditLimit: e.target.value })} /></div>
+                <div><Label>Statement closing day (1-31)</Label><Input type="number" min={1} max={31} value={f.statementClosingDay ?? ''} onChange={(e) => setF({ ...f, statementClosingDay: e.target.value })} /></div>
+                <div><Label>Payment due day (1-31)</Label><Input type="number" min={1} max={31} value={f.paymentDueDay ?? ''} onChange={(e) => setF({ ...f, paymentDueDay: e.target.value })} /></div>
+              </>}
             </div>
           </div>
         )}
@@ -166,12 +175,12 @@ function AccountDialog({ accounts, members, initial, onClose, onSave }: { accoun
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
           <Button disabled={!valid} onClick={() => onSave({
             name: f.name, institution: f.institution || null, type: f.type, openingBalance: Number(f.openingBalance), ownership,
+            ...(hasLink ? { linkedRepaymentAccountId: f.linkedRepaymentAccountId || null } : { linkedRepaymentAccountId: null }),
             ...(isCc ? {
-              linkedRepaymentAccountId: f.linkedRepaymentAccountId || null,
               creditLimit: f.creditLimit ? Number(f.creditLimit) : null,
               statementClosingDay: f.statementClosingDay ? Number(f.statementClosingDay) : null,
               paymentDueDay: f.paymentDueDay ? Number(f.paymentDueDay) : null,
-            } : { linkedRepaymentAccountId: null, creditLimit: null, statementClosingDay: null, paymentDueDay: null }),
+            } : { creditLimit: null, statementClosingDay: null, paymentDueDay: null }),
           })}>Save</Button>
         </div>
       </div>

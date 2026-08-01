@@ -1,9 +1,10 @@
 import Papa from 'papaparse';
-import { parseAmount, parseDate } from '../utils.js';
+import { parseAmount, parseDate, parseTime } from '../utils.js';
 import type { ImportFileFormat } from '@homefinance/shared';
 
 export interface ParsedRow {
   date: string | null; // yyyy-mm-dd
+  time: string | null; // HH:mm:ss when available, else null
   description: string;
   amount: number; // negative = expense
   balance: number | null;
@@ -14,6 +15,31 @@ export interface ParseResult {
   rows: ParsedRow[];
   headers: string[]; // for CSV column-mapping UI
   format: ImportFileFormat;
+  /** Closing/ledger balance carried by the file when available (OFX LEDGERBAL).
+   *  Null when the file has no explicit statement balance. */
+  closingBalance?: number | null;
+}
+
+/** Derive the statement's opening balance (balance just before the first
+ *  transaction in the file) when possible:
+ *  - OFX: closingBalance (LEDGERBAL) − Σ(row amounts).
+ *  - CSV: first row carrying a running balance → balance − amount.
+ *  Returns null when neither is available (e.g. QIF, or CSV with no balance col). */
+export function deriveOpeningBalance(rows: ParsedRow[], closingBalance?: number | null): number | null {
+  if (closingBalance != null && Number.isFinite(closingBalance)) {
+    const sum = rows.reduce((s, r) => s + (r.amount || 0), 0);
+    return round2(closingBalance - sum);
+  }
+  for (const r of rows) {
+    if (r.balance != null && Number.isFinite(r.balance)) {
+      return round2(r.balance - (r.amount || 0));
+    }
+  }
+  return null;
+}
+
+function round2(n: number): number {
+  return Math.round((n + Number.EPSILON) * 100) / 100;
 }
 
 // ---- CSV ----
@@ -32,6 +58,7 @@ export function parseCsv(buffer: Buffer, opts?: { hasHeader?: boolean; amountSig
   }
   const rows: ParsedRow[] = rowsData.map((r) => ({
     date: null,
+    time: null,
     description: r.join(' '),
     amount: 0,
     balance: null,
@@ -67,6 +94,7 @@ export function mapCsvRow(
 
   return {
     date: parseDate(get('date'), dateFormat),
+    time: parseTime(get('time')),
     description: (get('description') || get('reference') || '').trim(),
     amount,
     balance: parseAmount(get('balance')),
@@ -78,6 +106,14 @@ export function mapCsvRow(
 export function parseOfx(buffer: Buffer): ParseResult {
   const text = buffer.toString('utf8').replace(/\r/g, '');
   const rows: ParsedRow[] = [];
+
+  // Statement closing (ledger) balance: <LEDGERBAL><BALAMT>1234.56</BALAMT>...
+  let closingBalance: number | null = null;
+  const balMatch = text.match(/<LEDGERBAL>[\s\S]*?<BALAMT>\s*([-\d.,]+)/i);
+  if (balMatch) {
+    const v = parseAmount(balMatch[1]);
+    closingBalance = v ?? null;
+  }
 
   // Normalize SGML: strip < tags into newline-separated fields.
   // Extract <STMTTRN> ... </STMTTRN> blocks (works for both SGML and XML-ish).
@@ -91,8 +127,11 @@ export function parseOfx(buffer: Buffer): ParseResult {
     const name = g('NAME') || g('MEMO') || '';
     const memo = g('MEMO') || '';
     const trnamt = parseAmount(g('TRNAMT')) ?? 0;
+    // OFX DTPOSTED: YYYYMMDDHHMMSS[.sss] — time is the digits after the date.
+    const timeRaw = dateRaw && dateRaw.length > 10 ? dateRaw.slice(10).replace(/[^0-9]/g, '').slice(0, 6) : '';
     rows.push({
       date: parseDate(dateRaw),
+      time: parseTime(timeRaw),
       description: (name + (memo && memo !== name ? ' ' + memo : '')).trim(),
       amount: trnamt,
       balance: null,
@@ -105,7 +144,7 @@ export function parseOfx(buffer: Buffer): ParseResult {
       },
     });
   }
-  return { rows, headers: ['DTPOSTED', 'NAME', 'MEMO', 'TRNAMT', 'FITID'], format: 'ofx' as const };
+  return { rows, headers: ['DTPOSTED', 'NAME', 'MEMO', 'TRNAMT', 'FITID'], format: 'ofx' as const, closingBalance };
 }
 
 // ---- QIF ----
@@ -137,6 +176,7 @@ export function parseQif(buffer: Buffer): ParseResult {
         if (cur.date || cur.description) {
           rows.push({
             date: cur.date ?? null,
+            time: null,
             description: (cur.description || '').trim(),
             amount: cur.amount ?? 0,
             balance: null,

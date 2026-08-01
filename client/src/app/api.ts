@@ -4,6 +4,9 @@ import type {
   AiConfigDto,
   AiConnectionTestResult,
   AiConnectionTestLogEntry,
+  AnomalyDto,
+  BudgetDto,
+  CategoryAnalytics,
   CategoryDto,
   CategoryReport,
   DashboardScope,
@@ -16,6 +19,7 @@ import type {
   PagedResult,
   PortfolioSummary,
   RuleDto,
+  SubscriptionDto,
   TransactionDto,
   TransactionFilter,
 } from '@homefinance/shared';
@@ -23,7 +27,7 @@ import type {
 export const api = createApi({
   reducerPath: 'api',
   baseQuery: fetchBaseQuery({ baseUrl: '/api' }),
-  tagTypes: ['Member', 'Account', 'Category', 'Rule', 'Transaction', 'ImportBatch', 'Mapping', 'Insight', 'Setting', 'Backup', 'Investment', 'Price', 'TestHistory'],
+  tagTypes: ['Member', 'Account', 'Category', 'Rule', 'Transaction', 'ImportBatch', 'Mapping', 'Insight', 'Setting', 'Backup', 'Investment', 'Price', 'TestHistory', 'Budget'],
   endpoints: (b) => ({
     // ---- Members ----
     listMembers: b.query<MemberDto[], void>({ query: () => '/members', providesTags: ['Member'] }),
@@ -85,6 +89,10 @@ export const api = createApi({
     commitImport: b.mutation<any, any>({ query: (body) => ({ url: '/imports/commit', method: 'POST', body }), invalidatesTags: ['Transaction', 'ImportBatch'] }),
     listImportBatches: b.query<ImportBatchDto[], void>({ query: () => '/imports/batches', providesTags: ['ImportBatch'] }),
     deleteImportBatch: b.mutation<void, string>({ query: (id) => ({ url: `/imports/batches/${id}`, method: 'DELETE' }), invalidatesTags: ['Transaction', 'ImportBatch'] }),
+    clearImportHistory: b.mutation<{ deletedTransactions: number; deletedBatches: number }, void>({
+      query: () => ({ url: '/imports/batches', method: 'DELETE', body: { confirm: 'DELETE' } }),
+      invalidatesTags: ['Transaction', 'ImportBatch'],
+    }),
     listMappings: b.query<ImportMappingDto[], void>({ query: () => '/imports/mappings', providesTags: ['Mapping'] }),
     createMapping: b.mutation<any, any>({ query: (body) => ({ url: '/imports/mappings', method: 'POST', body }), invalidatesTags: ['Mapping'] }),
     deleteMapping: b.mutation<void, string>({ query: (id) => ({ url: `/imports/mappings/${id}`, method: 'DELETE' }), invalidatesTags: ['Mapping'] }),
@@ -105,15 +113,26 @@ export const api = createApi({
     getIncomeExpenseReport: b.query<CategoryReport, { preset?: string; dateFrom?: string; dateTo?: string; accountId?: string; memberId?: string }>({
       query: (p) => ({ url: '/reports/income-expense-by-category', params: p }),
     }),
+    getCategoryAnalytics: b.query<CategoryAnalytics, { preset?: string; dateFrom?: string; dateTo?: string; accountId?: string; memberId?: string; categoryId?: string[]; includeIncome?: boolean }>({
+      query: (p) => ({ url: '/reports/category-analytics', params: { ...p, categoryId: p.categoryId?.join(',') } }),
+    }),
     generateForecastReport: b.mutation<ForecastReport, { accountId?: string[]; memberId?: string[] }>({ query: (body) => ({ url: '/ai/forecast-report', method: 'POST', body }) }),
+
+    // ---- Budgets ----
+    listBudgets: b.query<BudgetDto[], void>({ query: () => '/budgets', providesTags: ['Budget'] }),
+    upsertBudget: b.mutation<BudgetDto, { categoryId: string; monthlyAmount: number }>({
+      query: ({ categoryId, monthlyAmount }) => ({ url: `/budgets/${categoryId}`, method: 'PUT', body: { monthlyAmount } }),
+      invalidatesTags: ['Budget'],
+    }),
+    deleteBudget: b.mutation<void, string>({ query: (categoryId) => ({ url: `/budgets/${categoryId}`, method: 'DELETE' }), invalidatesTags: ['Budget'] }),
 
     // ---- AI ----
     aiStatus: b.query<{ enabled: boolean }, void>({ query: () => '/ai/status' }),
     generateInsight: b.mutation<{ jobId: string }, { scope?: string }>({ query: (body) => ({ url: '/ai/insight', method: 'POST', body }) }),
     latestInsight: b.query<any, string>({ query: (scope) => ({ url: '/ai/insight/latest', params: { scope } }) }),
     generateForecast: b.mutation<any, { scope?: string }>({ query: (body) => ({ url: '/ai/forecast', method: 'POST', body }) }),
-    listAnomalies: b.query<any, { accountId?: string }>({ query: (p) => ({ url: '/ai/anomalies', params: p }) }),
-    listSubscriptions: b.query<any, { accountId?: string }>({ query: (p) => ({ url: '/ai/subscriptions', params: p }) }),
+    listAnomalies: b.query<AnomalyDto[], { accountId?: string }>({ query: (p) => ({ url: '/ai/anomalies', params: p }) }),
+    listSubscriptions: b.query<SubscriptionDto[], { accountId?: string }>({ query: (p) => ({ url: '/ai/subscriptions', params: p }) }),
     listCloudModels: b.query<{ models: string[]; error?: string }, void>({ query: () => '/ai/models' }),
     testConnection: b.mutation<AiConnectionTestResult, { baseUrl?: string; apiKey?: string }>({ query: (body) => ({ url: '/ai/test-connection', method: 'POST', body }), invalidatesTags: ['TestHistory'] }),
     testHistory: b.query<AiConnectionTestLogEntry[], void>({ query: () => '/ai/test-history', providesTags: ['TestHistory'] }),
@@ -139,10 +158,11 @@ export const {
   useListCategoriesQuery, useCreateCategoryMutation, useUpdateCategoryMutation, useDeleteCategoryMutation,
   useListRulesQuery, useCreateRuleMutation, useUpdateRuleMutation, useDeleteRuleMutation, useTestRuleMutation, useReorderRulesMutation, useListSeedDefaultsQuery, useRestoreSeedRuleMutation,
   useListTransactionsQuery, useCreateTransactionMutation, useUpdateTransactionMutation, useDeleteTransactionMutation, useBulkCategorizeMutation, useRecategorizeMutation, useDeleteAllTransactionsMutation, useMarkReviewedMutation, useLinkTransferMutation, useUnlinkTransferMutation, useSuggestCategoryMutation,
-  useUploadImportMutation, useEstimateAiMutation, useCommitImportMutation, useListImportBatchesQuery, useDeleteImportBatchMutation, useListMappingsQuery, useCreateMappingMutation, useDeleteMappingMutation,
+  useUploadImportMutation, useEstimateAiMutation, useCommitImportMutation, useListImportBatchesQuery, useDeleteImportBatchMutation, useClearImportHistoryMutation, useListMappingsQuery, useCreateMappingMutation, useDeleteMappingMutation,
   useGetOverviewQuery, useGetDeepDiveQuery,
   useGetPortfolioQuery, useListHoldingsQuery, useCreateHoldingMutation, useDeleteHoldingMutation, useImportHoldingsMutation, useRefreshPriceMutation,
-  useGetIncomeExpenseReportQuery, useGenerateForecastReportMutation,
+  useGetIncomeExpenseReportQuery, useGetCategoryAnalyticsQuery, useGenerateForecastReportMutation,
+  useListBudgetsQuery, useUpsertBudgetMutation, useDeleteBudgetMutation,
   useAiStatusQuery, useGenerateInsightMutation, useLatestInsightQuery, useGenerateForecastMutation, useListAnomaliesQuery, useListSubscriptionsQuery, useListCloudModelsQuery, useTestConnectionMutation, useTestHistoryQuery, useSuggestAiCategoryMutation,
   useGetAiConfigQuery, useUpdateAiConfigMutation,
   useListBackupsQuery, useCreateBackupMutation, useDeleteBackupMutation,

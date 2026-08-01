@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseCsv, parseOfx, parseQif, mapCsvRow } from '../services/parsers.js';
+import { parseCsv, parseOfx, parseQif, mapCsvRow, deriveOpeningBalance } from '../services/parsers.js';
 
 describe('parseCsv', () => {
   it('parses header + rows and exposes headers', () => {
@@ -50,6 +50,32 @@ describe('parseOfx', () => {
     expect(r.rows[0].amount).toBe(-85.2);
     expect(r.rows[0].description).toContain('WOOLWORTHS');
     expect(r.rows[1].amount).toBe(5000);
+  });
+  it('parses LEDGERBAL closing balance and derives opening balance', () => {
+    const ofx = `<OFX><BANKMSGSRSV1><STMTTRNRS><STMTRS>
+<LEDGERBAL><BALAMT>4914.80<DTASOF>20260703</LEDGERBAL>
+<BANKTRANLIST>
+<STMTTRN><TRNTYPE>DEBIT<DTPOSTED>20260701<TRNAMT>-85.20<NAME>WOOLWORTHS</STMTTRN>
+<STMTTRN><TRNTYPE>CREDIT<DTPOSTED>20260703<TRNAMT>5000.00<NAME>SALARY</STMTTRN>
+</BANKTRANLIST></STMTRS></STMTTRNRS></BANKMSGSRSV1></OFX>`;
+    const r = parseOfx(Buffer.from(ofx));
+    expect(r.closingBalance).toBe(4914.8);
+    // opening = closing - Σ(amounts) = 4914.8 - (-85.2 + 5000) = 0
+    expect(deriveOpeningBalance(r.rows, r.closingBalance)).toBe(0);
+  });
+});
+
+describe('deriveOpeningBalance', () => {
+  it('uses first running-balance row (balance - amount) when no closing balance', () => {
+    const rows = [
+      { date: '2026-07-01', time: null, description: 'X', amount: -85.2, balance: 914.8, raw: {} },
+      { date: '2026-07-02', time: null, description: 'Y', amount: -10, balance: 904.8, raw: {} },
+    ];
+    expect(deriveOpeningBalance(rows, null)).toBe(1000); // 914.8 - (-85.2)
+  });
+  it('returns null when no balance info available', () => {
+    const rows = [{ date: '2026-07-01', time: null, description: 'X', amount: -10, balance: null, raw: {} }];
+    expect(deriveOpeningBalance(rows, null)).toBeNull();
   });
 });
 

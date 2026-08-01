@@ -20,6 +20,7 @@ import settingsRouter from './routes/settings.js';
 import backupsRouter from './routes/backups.js';
 import investmentsRouter from './routes/investments.js';
 import reportsRouter from './routes/reports.js';
+import budgetsRouter from './routes/budgets.js';
 import { runWeeklyDigest } from './services/ai.js';
 import { backupDb } from './services/backup.js';
 import { snapshotPrice } from './services/investments.js';
@@ -77,6 +78,7 @@ api.use('/settings', settingsRouter);
 api.use('/backups', backupsRouter);
 api.use('/investments', investmentsRouter);
 api.use('/reports', reportsRouter);
+api.use('/budgets', budgetsRouter);
 app.use('/api', api);
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }));

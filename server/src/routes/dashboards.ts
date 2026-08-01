@@ -45,6 +45,12 @@ router.get('/overview', (req, res) => {
   const cats = d.select().from(schema.categories).all();
   const catName = new Map(cats.map((c) => [c.id, c.name]));
   const own = ownershipMap();
+  // Transfer-like = isTransfer flag OR a transfer-type category (Investment,
+  // Credit Card Repayment, Transfers). Excluded from spend/income totals but
+  // NOT from balance/net-worth (money still moves between accounts).
+  const transferCatIds = new Set(cats.filter((c) => c.type === 'transfer').map((c) => c.id));
+  const isTransferLike = (t: { isTransfer: boolean; categoryId: string | null }) =>
+    t.isTransfer || (t.categoryId != null && transferCatIds.has(t.categoryId));
 
   // Total balance across accounts = sum(opening) + sum(transaction amounts)
   const balanceByAccount = new Map<string, number>();
@@ -79,34 +85,37 @@ router.get('/overview', (req, res) => {
   for (const t of txns) {
     const month = t.date.slice(0, 7);
     // Transfers are excluded from spend/income totals (Phase 2 §2.4).
-    if (!t.isTransfer && monthlySeries.has(month)) {
+    if (!isTransferLike(t) && monthlySeries.has(month)) {
       const s = monthlySeries.get(month)!;
       if (t.amount < 0) s.expense += -t.amount;
       else s.income += t.amount;
     }
     if (inCur(t.date)) {
-      if (!t.isTransfer) {
+      if (!isTransferLike(t)) {
         if (t.amount < 0) curSpend += -t.amount;
         else curIncome += t.amount;
       }
-      if (t.amount < 0 && !t.isTransfer) {
+      if (t.amount < 0 && !isTransferLike(t)) {
         const cn = catName.get(t.categoryId || '') || 'Uncategorized';
         curByCat.set(cn, (curByCat.get(cn) || 0) + -t.amount);
-        if (trendMonths.includes(month)) {
-          if (!catTrend.has(month)) catTrend.set(month, new Map());
-          catTrend.get(month)!.set(cn, (catTrend.get(month)!.get(cn) || 0) + -t.amount);
-        }
       }
     }
     if (inPrev(t.date)) {
-      if (!t.isTransfer) {
+      if (!isTransferLike(t)) {
         if (t.amount < 0) prevSpend += -t.amount;
         else prevIncome += t.amount;
       }
-      if (t.amount < 0 && !t.isTransfer) {
+      if (t.amount < 0 && !isTransferLike(t)) {
         const cn = catName.get(t.categoryId || '') || 'Uncategorized';
         prevByCat.set(cn, (prevByCat.get(cn) || 0) + -t.amount);
       }
+    }
+    // Category trend (trailing 6 months) — independent of the current/prev
+    // month windows so past months actually populate the stacked bar.
+    if (t.amount < 0 && !isTransferLike(t) && trendMonths.includes(month)) {
+      const cn = catName.get(t.categoryId || '') || 'Uncategorized';
+      if (!catTrend.has(month)) catTrend.set(month, new Map());
+      catTrend.get(month)!.set(cn, (catTrend.get(month)!.get(cn) || 0) + -t.amount);
     }
   }
 
@@ -151,7 +160,7 @@ router.get('/overview', (req, res) => {
       if (pct > 0) {
         netWorth += ((balanceByAccount.get(a.id) || 0) * pct) / 100;
         for (const t of txns) {
-          if (t.accountId === a.id && inCur(t.date) && t.amount < 0 && !t.isTransfer) spend += (-t.amount * pct) / 100;
+          if (t.accountId === a.id && inCur(t.date) && t.amount < 0 && !isTransferLike(t)) spend += (-t.amount * pct) / 100;
         }
       }
     }
@@ -175,6 +184,22 @@ router.get('/overview', (req, res) => {
       source: t.source,
     }));
 
+  // Household net-worth trend (trailing 12 months) — sum of all account
+  // balances (opening + txns up to month-end) at each month-end. All accounts
+  // at 100% (household view, no member weighting). Mirrors /deepdive netWorthTrend.
+  const netWorthTrend: { month: string; value: number }[] = [];
+  for (let i = 11; i >= 0; i--) {
+    const ms = addMonths(now, -i);
+    const me = monthEnd(ms);
+    let v = 0;
+    for (const a of accts) {
+      const upto = txns.filter((t) => t.accountId === a.id && t.date <= me).reduce((s, t) => s + t.amount, 0);
+      v += a.openingBalance + upto;
+    }
+    const k = `${ms.getFullYear()}-${String(ms.getMonth() + 1).padStart(2, '0')}`;
+    netWorthTrend.push({ month: k, value: Math.round(v * 100) / 100 });
+  }
+
   res.json({
     summary: {
       totalBalance: Math.round(totalBalance * 100) / 100,
@@ -187,6 +212,7 @@ router.get('/overview', (req, res) => {
       netCashFlow: Math.round((curIncome - curSpend) * 100) / 100,
       period: { from: curStart, to: curEnd, prevFrom: prevStart, prevTo: prevEnd },
     },
+    netWorthTrend,
     spendingByCategory: [...curByCat.entries()].map(([name, value]) => ({ name, value: Math.round(value * 100) / 100 })).sort((a, b) => b.value - a.value),
     categoryTrend: trendMonths.map((month) => ({
       month,
@@ -220,6 +246,9 @@ router.get('/deepdive', (req, res) => {
   const cats = d.select().from(schema.categories).all();
   const catName = new Map(cats.map((c) => [c.id, c.name]));
   const own = ownershipMap();
+  const transferCatIds = new Set(cats.filter((c) => c.type === 'transfer').map((c) => c.id));
+  const isTransferLike = (t: { isTransfer: boolean; categoryId: string | null }) =>
+    t.isTransfer || (t.categoryId != null && transferCatIds.has(t.categoryId));
 
   // Determine which accounts + percentages apply to this scope
   const scopePct = new Map<string, number>(); // accountId -> percentage
@@ -266,7 +295,7 @@ router.get('/deepdive', (req, res) => {
   for (const t of scopedTxns) {
     const sh = shareOf(t);
     const month = t.date.slice(0, 7);
-    if (t.isTransfer) continue;
+    if (isTransferLike(t)) continue;
     if (inCur(t.date) && t.amount < 0) {
       curSpend += -sh;
       const cn = catName.get(t.categoryId || '') || 'Uncategorized';

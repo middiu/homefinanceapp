@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useDispatch } from 'react-redux';
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, Legend, CartesianGrid, Line, ComposedChart, Area } from 'recharts';
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, Legend, CartesianGrid, Line, LineChart, ComposedChart, Area, AreaChart } from 'recharts';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
@@ -38,6 +38,13 @@ export default function OverviewPage() {
   const pie = data.spendingByCategory;
   const catTrend = data.categoryTrend;
   const ivs = data.incomeVsExpense;
+  const nwt = data.netWorthTrend as { month: string; value: number }[] | undefined;
+  // Cumulative cash flow: running Σ(income − expense) across trailing 12 months.
+  let running = 0;
+  const cumulative = ivs.map((m: any) => {
+    running += m.income - m.expense;
+    return { month: monthLabel(m.month), cumulative: Math.round(running * 100) / 100 };
+  });
 
   // collect category names for stacked bar
   const catNames = Array.from(new Set(catTrend.flatMap((m: any) => Object.keys(m.categories) as string[]))) as string[];
@@ -94,7 +101,7 @@ export default function OverviewPage() {
           <CardHeader><CardTitle>Income vs expense</CardTitle><CardDescription>Trailing 12 months</CardDescription></CardHeader>
           <CardContent>
             <ResponsiveContainer width="100%" height={260}>
-              <ComposedChart data={ivs.map((m: any) => ({ month: monthLabel(m.month), Income: m.income, Expense: m.expense }))}>
+              <ComposedChart data={ivs.map((m: any) => ({ month: monthLabel(m.month), Income: m.income, Expense: m.expense, Net: m.income - m.expense }))}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#333" vertical={false} />
                 <XAxis dataKey="month" tick={{ fontSize: 11 }} />
                 <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} />
@@ -102,8 +109,48 @@ export default function OverviewPage() {
                 <Legend wrapperStyle={{ fontSize: 11 }} />
                 <Bar dataKey="Income" fill="#10b981" />
                 <Bar dataKey="Expense" fill="#ef4444" />
-                <Line dataKey="Income" stroke="#10b981" type="monotone" dot={false} />
+                <Line dataKey="Net" stroke="#3b82f6" type="monotone" dot={false} strokeWidth={2} />
               </ComposedChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="mt-4 grid gap-4 lg:grid-cols-3">
+        <Card className="lg:col-span-1">
+          <CardHeader><CardTitle>Net worth trend</CardTitle><CardDescription>Trailing 12 months</CardDescription></CardHeader>
+          <CardContent>
+            {nwt && nwt.length > 0 ? (
+              <ResponsiveContainer width="100%" height={240}>
+                <LineChart data={nwt.map((p) => ({ month: monthLabel(p.month), value: p.value }))}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#333" vertical={false} />
+                  <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} />
+                  <Tooltip formatter={(v: any) => formatAUD(Number(v))} />
+                  <Line dataKey="value" stroke="#3b82f6" type="monotone" dot={false} strokeWidth={2} />
+                </LineChart>
+              </ResponsiveContainer>
+            ) : <EmptyState message="No data yet" />}
+          </CardContent>
+        </Card>
+
+        <Card className="lg:col-span-2">
+          <CardHeader><CardTitle>Cumulative cash flow</CardTitle><CardDescription>Running net (income − expense), trailing 12 months</CardDescription></CardHeader>
+          <CardContent>
+            <ResponsiveContainer width="100%" height={240}>
+              <AreaChart data={cumulative}>
+                <defs>
+                  <linearGradient id="cfGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.4} />
+                    <stop offset="95%" stopColor="#3b82f6" stopOpacity={0.05} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#333" vertical={false} />
+                <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} />
+                <Tooltip formatter={(v: any) => formatAUD(Number(v))} />
+                <Area dataKey="cumulative" stroke="#3b82f6" strokeWidth={2} fill="url(#cfGrad)" type="monotone" />
+              </AreaChart>
             </ResponsiveContainer>
           </CardContent>
         </Card>
@@ -149,30 +196,39 @@ export default function OverviewPage() {
       <div className="mt-4 grid gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <CardHeader className="flex-row items-center justify-between">
-            <CardTitle>Account balances</CardTitle>
+            <div>
+              <CardTitle>Account balances</CardTitle>
+              <div className="text-sm text-muted-foreground">Total <span className="font-semibold text-foreground">{formatAUD(s.totalBalance)}</span></div>
+            </div>
             <Button variant="ghost" size="sm" onClick={() => navigate('/accounts')}>Manage</Button>
           </CardHeader>
           <CardContent className="space-y-4">
             {Object.keys(data.accountsByType).length === 0 ? <EmptyState message="No accounts. Add one in Accounts & Members." /> :
-              Object.entries(data.accountsByType).map(([type, list]) => (
-                <div key={type}>
-                  <div className="mb-1 text-xs font-medium uppercase text-muted-foreground">{type}</div>
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    {(list as any[]).map((a) => (
-                      <div key={a.id} className="flex items-center justify-between rounded-md border border-border p-2">
-                        <div>
-                          <div className="text-sm font-medium">{a.name}</div>
-                          {a.type === 'credit_card' && a.creditLimit != null && (
-                            <div className="text-xs text-muted-foreground">avail {formatAUD(a.creditLimit + a.balance)}</div>
-                          )}
-                          <Sparkline data={a.spark} />
+              Object.entries(data.accountsByType).map(([type, list]) => {
+                const subtotal = (list as any[]).reduce((sum, a) => sum + a.balance, 0);
+                return (
+                  <div key={type}>
+                    <div className="mb-1 flex items-center justify-between text-xs font-medium uppercase text-muted-foreground">
+                      <span>{type}</span>
+                      <span className="normal-case font-normal text-muted-foreground">{formatAUD(subtotal)}</span>
+                    </div>
+                    <div className="space-y-2">
+                      {(list as any[]).map((a) => (
+                        <div key={a.id} className="flex items-center justify-between rounded-md border border-border p-2">
+                          <div className="min-w-0">
+                            <div className="text-sm font-medium">{a.name}</div>
+                            {a.type === 'credit_card' && a.creditLimit != null && (
+                              <div className="text-xs text-muted-foreground">avail {formatAUD(a.creditLimit + a.balance)}</div>
+                            )}
+                            <Sparkline data={a.spark} />
+                          </div>
+                          <Money amount={a.balance} />
                         </div>
-                        <Money amount={a.balance} />
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
           </CardContent>
         </Card>
 

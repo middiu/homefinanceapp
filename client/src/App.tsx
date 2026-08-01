@@ -1,5 +1,5 @@
 import { NavLink, Route, Routes } from 'react-router-dom';
-import { LayoutDashboard, UserSquare2, ListChecks, Upload, Tags, Wallet, Sparkles, DatabaseBackup, TrendingUp, BarChart3, Sun, Moon } from 'lucide-react';
+import { LayoutDashboard, UserSquare2, ListChecks, Upload, Tags, Wallet, Sparkles, DatabaseBackup, TrendingUp, BarChart3, PieChart, Sun, Moon, PiggyBank, Lightbulb } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useTheme } from './app/theme';
 import OverviewPage from '@/pages/OverviewPage';
@@ -12,17 +12,26 @@ import AiSettingsPage from '@/pages/AiSettingsPage';
 import BackupsPage from '@/pages/BackupsPage';
 import InvestmentsPage from '@/pages/InvestmentsPage';
 import ReportIncomeExpensePage from '@/pages/ReportIncomeExpensePage';
+import ReportCategoryAnalyticsPage from '@/pages/ReportCategoryAnalyticsPage';
 import ReportForecastPage from '@/pages/ReportForecastPage';
+import InsightsPage from '@/pages/InsightsPage';
+import BudgetsPage from '@/pages/BudgetsPage';
 
 const nav = [
+  // Dashboards / reports
   { to: '/', label: 'Household', icon: LayoutDashboard, end: true },
   { to: '/deepdive', label: 'Person/Account', icon: UserSquare2 },
+  { to: '/reports/income-expense', label: 'Income vs Expense', icon: BarChart3 },
+  { to: '/reports/categories', label: 'Category analytics', icon: PieChart },
+  { to: '/reports/forecast', label: 'Forecast', icon: Sparkles },
+  { to: '/insights', label: 'Insights', icon: Lightbulb },
+  { to: '/investments', label: 'Investments', icon: TrendingUp },
+  // Operational
   { to: '/transactions', label: 'Transactions', icon: ListChecks },
   { to: '/import', label: 'Import', icon: Upload },
-  { to: '/investments', label: 'Investments', icon: TrendingUp },
-  { to: '/reports/income-expense', label: 'Income vs Expense', icon: BarChart3 },
-  { to: '/reports/forecast', label: 'Forecast', icon: Sparkles },
+  // Admin / settings
   { to: '/categories', label: 'Categories & Rules', icon: Tags },
+  { to: '/budgets', label: 'Budgets', icon: PiggyBank },
   { to: '/accounts', label: 'Accounts & Members', icon: Wallet },
   { to: '/ai', label: 'AI & Insights', icon: Sparkles },
   { to: '/backups', label: 'Backups / Data', icon: DatabaseBackup },
@@ -101,7 +110,10 @@ export default function App() {
             <Route path="/import" element={<ImportPage />} />
             <Route path="/investments" element={<InvestmentsPage />} />
             <Route path="/reports/income-expense" element={<ReportIncomeExpensePage />} />
+            <Route path="/reports/categories" element={<ReportCategoryAnalyticsPage />} />
             <Route path="/reports/forecast" element={<ReportForecastPage />} />
+            <Route path="/insights" element={<InsightsPage />} />
+            <Route path="/budgets" element={<BudgetsPage />} />
             <Route path="/categories" element={<CategoriesRulesPage />} />
             <Route path="/accounts" element={<AccountsMembersPage />} />
             <Route path="/ai" element={<AiSettingsPage />} />

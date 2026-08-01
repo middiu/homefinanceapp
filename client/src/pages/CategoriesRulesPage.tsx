@@ -46,12 +46,24 @@ function CategoriesTab() {
             <div className="grid gap-1 sm:grid-cols-2">
               {(data ?? []).map((c) => (
                 <div key={c.id} className="flex items-center justify-between rounded-md border border-border px-3 py-1.5">
-                  <span className="flex items-center gap-2 text-sm">
+                  <span className="flex min-w-0 items-center gap-2 text-sm">
                     {c.name}
                     {c.isCustom ? <Badge tone="muted">custom</Badge> : <Badge tone="success">default</Badge>}
                     {c.type && <Badge tone={c.type === 'income' ? 'success' : c.type === 'expense' ? 'warning' : 'default'}>{c.type}</Badge>}
                   </span>
-                  {c.isCustom && <button onClick={() => del(c.id)} className="text-muted-foreground hover:text-red-400"><Trash2 className="h-4 w-4" /></button>}
+                  <span className="flex items-center gap-2">
+                    <Select
+                      value={c.essential == null ? '' : c.essential ? 'essential' : 'discretionary'}
+                      onChange={(e) => update({ id: c.id, body: { essential: e.target.value === '' ? null : e.target.value === 'essential' } })}
+                      className="h-7 w-32 text-xs"
+                      title="Tag as essential (need) or discretionary (want)"
+                    >
+                      <option value="">— untagged —</option>
+                      <option value="essential">Essential</option>
+                      <option value="discretionary">Discretionary</option>
+                    </Select>
+                    {c.isCustom && <button onClick={() => del(c.id)} className="text-muted-foreground hover:text-red-400"><Trash2 className="h-4 w-4" /></button>}
+                  </span>
                 </div>
               ))}
             </div>

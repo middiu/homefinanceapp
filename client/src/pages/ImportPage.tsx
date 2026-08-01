@@ -5,7 +5,7 @@ import { Select } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
-import { Upload, Undo2, Save, FileUp, Sparkles } from 'lucide-react';
+import { Upload, Undo2, Save, FileUp, Sparkles, AlertTriangle } from 'lucide-react';
 import {
   useListAccountsQuery,
   useListImportBatchesQuery,
@@ -16,12 +16,16 @@ import {
   useListMappingsQuery,
   useCreateMappingMutation,
   useDeleteMappingMutation,
+  useUpdateAccountMutation,
+  api,
 } from '@/app/api';
+import { useDispatch } from 'react-redux';
+import { JobProgressModal } from '@/components/JobProgressModal';
 import { PageHeader, EmptyState, Money } from '@/components/common';
 import { formatDate, formatAUD } from '@/lib/utils';
 import type { ImportFileFormat } from '@homefinance/shared';
 
-const FIELDS = ['date', 'description', 'amount', 'debit', 'credit', 'balance', 'reference'];
+const FIELDS = ['date', 'time', 'description', 'amount', 'debit', 'credit', 'balance', 'reference'];
 
 export default function ImportPage() {
   const { data: accounts } = useListAccountsQuery();
@@ -33,6 +37,7 @@ export default function ImportPage() {
   const [upload] = useUploadImportMutation();
   const [commit] = useCommitImportMutation();
   const [estimateAi] = useEstimateAiMutation();
+  const [updateAccount] = useUpdateAccountMutation();
 
   const [accountId, setAccountId] = useState('');
   const [format, setFormat] = useState<ImportFileFormat>('csv');
@@ -44,10 +49,14 @@ export default function ImportPage() {
   const [error, setError] = useState('');
   const [aiEstimate, setAiEstimate] = useState<any>(null);
   const [aiEstimating, setAiEstimating] = useState(false);
+  const [balancePrompt, setBalancePrompt] = useState<any>(null); // balanceCheck when mismatch needs user resolution
+  const [catJobId, setCatJobId] = useState<string | null>(null); // AI categorize job for the last import
+  const [notice, setNotice] = useState(''); // post-import confirmation
+  const dispatch = useDispatch();
 
   async function doUpload() {
     if (!file || !accountId) { setError('Select account and file'); return; }
-    setBusy(true); setError('');
+    setBusy(true); setError(''); setNotice('');
     try {
       const fd = new FormData();
       fd.append('file', file);
@@ -81,14 +90,34 @@ export default function ImportPage() {
     }
   }
 
-  async function doCommit() {
+  async function doCommit(resolve?: 'adjust' | 'asis') {
     if (!preview) return;
+    // Opening-balance reconciliation gate: if the file exposes an opening
+    // balance that disagrees with the account's current balance, ask the user
+    // before committing. They choose to adjust the account opening balance,
+    // import as-is, or cancel.
+    const bc = preview.balanceCheck;
+    if (bc && bc.mismatch && !resolve) {
+      setBalancePrompt(bc);
+      return;
+    }
+    setBalancePrompt(null);
     setBusy(true); setError('');
     try {
-      const rows = preview.rows.map((r: any) => ({ date: r.date, description: r.description, amount: r.amount, balance: r.balance, isDuplicate: r.isDuplicate }));
-      await commit({ accountId, format, fileName: preview.fileName, rows, applyRules: true });
+      if (resolve === 'adjust' && bc) {
+        await updateAccount({ id: accountId, body: { openingBalance: bc.suggestedOpening } });
+      }
+      const rows = preview.rows.map((r: any) => ({ date: r.date, time: r.time, description: r.description, amount: r.amount, balance: r.balance, isDuplicate: r.isDuplicate }));
+      const res: any = await commit({ accountId, format, fileName: preview.fileName, rows, applyRules: true });
+      const data = res.data || {};
+      // Records are in the DB now; clear the upload UI immediately. If the server
+      // kicked off AI categorization as a background job, surface its progress.
+      const dupes = rows.filter((r: any) => r.isDuplicate).length;
+      const imported = data.total != null ? data.inserted : rows.length - dupes;
+      setNotice(`Imported ${imported} transaction${imported === 1 ? '' : 's'}${data.duplicates ? `, ${data.duplicates} duplicate(s) skipped` : ''}.`);
       setPreview(null); setFile(null); setColumnMap({});
       refetch();
+      if (data.jobId) setCatJobId(data.jobId);
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -192,7 +221,7 @@ export default function ImportPage() {
                 } catch (e: any) { setAiEstimate({ error: e.message }); }
                 finally { setAiEstimating(false); }
               }}><Sparkles className="h-4 w-4" /> {aiEstimating ? 'Estimating…' : 'Estimate AI need'}</Button>
-              <Button onClick={doCommit} disabled={busy}><FileUp className="h-4 w-4" /> Commit import</Button>
+              <Button onClick={() => doCommit()} disabled={busy}><FileUp className="h-4 w-4" /> Commit import</Button>
             </div>
           </CardHeader>
           <CardContent>
@@ -207,13 +236,14 @@ export default function ImportPage() {
               <table className="w-full text-sm">
                 <thead className="sticky top-0 bg-card">
                   <tr className="border-b text-left text-muted-foreground">
-                    <th className="p-1">Date</th><th className="p-1">Description</th><th className="p-1 text-right">Amount</th><th className="p-1">Status</th>
+                    <th className="p-1">Date</th><th className="p-1">Time</th><th className="p-1">Description</th><th className="p-1 text-right">Amount</th><th className="p-1">Status</th>
                   </tr>
                 </thead>
                 <tbody>
                   {preview.rows.map((r: any, i: number) => (
                     <tr key={i} className="border-b">
                       <td className="p-1 whitespace-nowrap">{formatDate(r.date)}</td>
+                      <td className="p-1 whitespace-nowrap text-muted-foreground">{r.time || '—'}</td>
                       <td className="p-1 truncate" title={r.description}>{r.description}</td>
                       <td className="p-1 text-right"><Money amount={r.amount} /></td>
                       <td className="p-1">{r.isDuplicate ? <Badge tone="warning">dup</Badge> : <Badge tone="muted">new</Badge>}</td>
@@ -248,6 +278,43 @@ export default function ImportPage() {
           )}
         </CardContent>
       </Card>
+
+      {notice && !balancePrompt && (
+        <div className="fixed bottom-4 right-4 z-50 max-w-sm rounded-md border border-emerald-500/40 bg-card p-3 text-sm shadow-lg">
+          <div className="flex items-start gap-2">
+            <span className="text-emerald-400">✓</span>
+            <div className="flex-1">{notice}</div>
+            <button className="text-muted-foreground hover:text-foreground" onClick={() => setNotice('')}>×</button>
+          </div>
+        </div>
+      )}
+
+      <JobProgressModal
+        jobId={catJobId}
+        title="Categorizing imported transactions"
+        onDone={() => { dispatch(api.util.invalidateTags(['Transaction'])); setNotice('Categorization complete.'); }}
+        onClose={() => setCatJobId(null)}
+      />
+
+      {balancePrompt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/60" onClick={() => setBalancePrompt(null)} />
+          <div className="relative z-10 w-full max-w-md rounded-lg border border-amber-500/40 bg-card p-6">
+            <h2 className="mb-2 flex items-center gap-2 text-lg font-semibold text-amber-400"><AlertTriangle className="h-5 w-5" /> Opening balance mismatch</h2>
+            <p className="mb-3 text-sm text-muted-foreground">
+              The file's opening balance <strong>{formatAUD(balancePrompt.fileOpening)}</strong> doesn't match this account's current balance <strong>{formatAUD(balancePrompt.accountBalance)}</strong>. Difference: <strong>{formatAUD(balancePrompt.delta)}</strong>.
+            </p>
+            <p className="mb-4 text-sm text-muted-foreground">
+              This usually means the account's opening balance is off, or some transactions are missing/duplicated. Updating the opening balance to <strong>{formatAUD(balancePrompt.suggestedOpening)}</strong> makes the account reconcile with this statement.
+            </p>
+            <div className="flex flex-col gap-2">
+              <Button size="sm" onClick={() => doCommit('adjust')}>Update opening balance &amp; import</Button>
+              <Button size="sm" variant="outline" onClick={() => doCommit('asis')}>Import as-is (leave opening balance)</Button>
+              <Button size="sm" variant="ghost" onClick={() => setBalancePrompt(null)}>Cancel</Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

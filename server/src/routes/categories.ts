@@ -13,10 +13,18 @@ const body = z.object({
   parentId: z.string().nullish(),
   isCustom: z.boolean().default(true),
   type: z.enum(['income', 'expense', 'transfer']).nullish(),
+  essential: z.boolean().nullish(),
 });
 
 function map(r: typeof schema.categories.$inferSelect): CategoryDto {
-  return { id: r.id, name: r.name, parentId: r.parentId, isCustom: r.isCustom, type: (r.type as CategoryType) ?? null };
+  return {
+    id: r.id,
+    name: r.name,
+    parentId: r.parentId,
+    isCustom: r.isCustom,
+    type: (r.type as CategoryType) ?? null,
+    essential: r.essential ?? null,
+  };
 }
 
 router.get('/', (_req, res) => {

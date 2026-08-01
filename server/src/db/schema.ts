@@ -46,6 +46,15 @@ export const categories = sqliteTable('categories', {
   parentId: text('parent_id'),
   isCustom: integer('is_custom', { mode: 'boolean' }).notNull().default(false),
   type: text('type', { enum: ['income', 'expense', 'transfer'] }), // Phase 2 §7.3
+  essential: integer('essential', { mode: 'boolean' }), // true=need, false=want, null=untagged
+});
+
+// Per-category monthly spending budget (one row per category).
+export const categoryBudgets = sqliteTable('category_budgets', {
+  id: text('id').primaryKey(),
+  categoryId: text('category_id').notNull().references(() => categories.id, { onDelete: 'cascade' }),
+  monthlyAmount: real('monthly_amount').notNull(),
+  createdAt: text('created_at').notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
 export const rules = sqliteTable('rules', {
@@ -77,6 +86,7 @@ export const transactions = sqliteTable('transactions', {
   id: text('id').primaryKey(),
   accountId: text('account_id').notNull().references(() => accounts.id, { onDelete: 'cascade' }),
   date: text('date').notNull(), // yyyy-mm-dd
+  time: text('time'), // HH:mm:ss when the export carries a time, else null
   description: text('description').notNull(),
   rawDescription: text('raw_description'),
   amount: real('amount').notNull(), // negative = expense, positive = income
@@ -87,7 +97,7 @@ export const transactions = sqliteTable('transactions', {
   isTransfer: integer('is_transfer', { mode: 'boolean' }).notNull().default(false),
   linkedTransactionId: text('linked_transaction_id'), // Phase 2 §2.3
   needsReview: integer('needs_review', { mode: 'boolean' }).notNull().default(false), // Phase 2 §3.3
-  // dedup hash: account_id + date + amount + description hash
+  // dedup hash: account_id + date + amount + description + optional time hash
   dedupHash: text('dedup_hash').notNull(),
   createdAt: text('created_at').notNull().default(sql`CURRENT_TIMESTAMP`),
 });

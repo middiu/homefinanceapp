@@ -18,14 +18,19 @@ export function seedDefaults() {
     d.insert(schema.households).values({ id: randomUUID(), name: 'Our Household' }).run();
   }
 
-  // 2) default categories (+ Phase 2 §7.3 type backfill)
+  // 2) default categories (+ Phase 2 §7.3 type + essential backfill)
   const existingCats = d.select().from(schema.categories).all();
   const existingNames = new Set(existingCats.map((c) => c.name));
   const catNameToType = new Map(DEFAULT_CATEGORIES.map((c) => [c.name, c.type]));
+  const catNameToEssential = new Map(
+    DEFAULT_CATEGORIES.map((c) => [c.name, c.essential ?? null] as [string, boolean | null]),
+  );
   let catAdded = 0;
   for (const c of DEFAULT_CATEGORIES) {
     if (!existingNames.has(c.name)) {
-      d.insert(schema.categories).values({ id: randomUUID(), name: c.name, isCustom: false, type: c.type }).run();
+      d.insert(schema.categories)
+        .values({ id: randomUUID(), name: c.name, isCustom: false, type: c.type, essential: c.essential ?? null })
+        .run();
       catAdded++;
     }
   }
@@ -36,6 +41,13 @@ export function seedDefaults() {
     if (c.type == null) {
       const t = catNameToType.get(c.name) ?? (c.name === 'Income' ? 'income' : c.name === 'Transfers' ? 'transfer' : 'expense');
       d.update(schema.categories).set({ type: t }).where(eq(schema.categories.id, c.id)).run();
+    }
+  }
+  // Backfill essential on existing default categories still untagged (preserves user edits).
+  for (const c of allCats) {
+    if (c.essential == null && catNameToEssential.has(c.name)) {
+      const e = catNameToEssential.get(c.name)!;
+      d.update(schema.categories).set({ essential: e }).where(eq(schema.categories.id, c.id)).run();
     }
   }
 
