@@ -13,6 +13,7 @@ A self-hosted, private web application for tracking household finances. Import b
 - **AI:** server-side provider abstraction; default Ollama Cloud (OpenAI-compatible `/chat/completions`)
 - **Scheduler:** node-cron (weekly AI digest + daily backup)
 - **Tests:** Vitest
+- **Container runtime:** Podman (Docker-compatible; `docker compose` works too)
 
 ## Repository layout
 
@@ -28,16 +29,16 @@ homefinance/
 ## Prerequisites
 
 - Node.js ≥ 22 (for local dev without Docker)
-- Docker + Docker Compose (for the containerized deployment)
+- Podman + `podman compose` (or Docker + Docker Compose) for the containerized deployment
 
-## Quick start — Docker Compose (recommended)
+## Quick start — Podman Compose (recommended)
 
 ```bash
 cp .env.example .env       # edit AI_API_KEY etc. if you want AI features
-docker compose up --build
+podman compose up --build
 ```
 
-The app is then available at <http://localhost:4000>. The SQLite file and backups are persisted in mounted volumes (`./data`, `./backups`).
+The app is then available at <http://localhost:4000>. The SQLite database and backups live in **named volumes** (`homefinance-db`, `homefinance-backups`) that survive image rebuilds and `podman compose down` — your data is not lost when you build a new image. Docker works identically if you prefer it (`docker compose up --build`).
 
 ## Local dev without Docker
 

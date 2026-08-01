@@ -1,3 +1,6 @@
+# Podman/Docker Compose. Tested with `podman compose`.
+# Named volumes persist the SQLite DB and backups across image rebuilds and
+# can be reused by a new image without data loss.
 services:
   homefinance:
     build: .
@@ -8,7 +11,7 @@ services:
     environment:
       PORT: 4000
       DATABASE_URL: /data/homefinance.sqlite
-      BACKUP_DIR: /data/backups
+      BACKUP_DIR: /backups
       AI_ENABLED: ${AI_ENABLED:-true}
       AI_BASE_URL: ${AI_BASE_URL:-https://ollama.com/v1}
       AI_API_KEY: ${AI_API_KEY:-}
@@ -17,5 +20,13 @@ services:
       BACKUP_CRON: ${BACKUP_CRON:-0 3 * * *}
       BACKUP_KEEP: ${BACKUP_KEEP:-14}
     volumes:
-      - ./data:/data
-      - ./backups:/data/backups
+      # Reusable named volume: survives image rebuilds, not lost on `podman compose down`.
+      - homefinance-db:/data
+      - homefinance-backups:/backups
+    # Label for podman (harmless under docker).
+    labels:
+      io.containers.autoupdate: "registry"
+
+volumes:
+  homefinance-db:
+  homefinance-backups:

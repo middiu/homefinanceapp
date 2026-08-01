@@ -1,21 +1,43 @@
 # Deployment
 
-## Local — Docker Compose (recommended for self-hosting)
+## Local — Podman Compose (recommended for self-hosting)
 
 ```bash
 cp .env.example .env        # set AI_API_KEY etc. if you want AI features
-docker compose up --build -d
+podman compose up --build -d
 ```
 
-Open <http://localhost:4000>. The single container runs the Express API and serves the built React SPA. The SQLite database and backups persist in mounted volumes (`./data`, `./backups`).
+Open <http://localhost:4000>. The single container runs the Express API and serves the built React SPA. Docker works identically — substitute `docker compose` for `podman compose` everywhere below.
 
-Stop: `docker compose down`. Rebuild after code changes: `docker compose up --build -d`.
+### Reusable named volumes (data survives image rebuilds)
+
+The SQLite database and backups are stored in **named volumes**, not bind mounts:
+
+| Volume | Mount | Contents |
+|---|---|---|
+| `homefinance-db` | `/data` | `homefinance.sqlite` (+ WAL/shm) |
+| `homefinance-backups` | `/backups` | daily + manual backup copies |
+
+Because they are named volumes, your data persists across `podman compose down` and is **not lost when you build a new image** (`podman compose up --build`). To reuse the same data with a freshly built image, just rebuild — the volume is re-attached automatically.
+
+Manage volumes:
+```bash
+podman volume ls
+podman volume inspect homefinance-db
+# back up the volume contents to host:
+podman run --rm -v homefinance-db:/data -v "$PWD":/out alpine tar czf /out/homefinance-db.tgz -C /data .
+# restore into a fresh volume:
+podman volume create homefinance-db
+podman run --rm -v homefinance-db:/data -v "$PWD":/out alpine tar xzf /out/homefinance-db.tgz -C /data
+```
+
+Stop: `podman compose down`. Rebuild after code changes: `podman compose up --build -d`. Remove volumes (destroys data): `podman compose down -v`.
 
 ### What the container does
 
 - Builds `shared`, `server`, and `client` inside the image.
-- Runs `db:seed` at startup (idempotent: creates tables via bootstrap + default categories).
-- Starts `node dist/index.js` (Express on `PORT`, serves `client/dist`).
+- Boots `node server/dist/index.js`, which itself bootstraps tables + seeds default categories (idempotent).
+- Serves the Express API on `PORT` and the built React SPA from the same origin.
 - `node-cron` schedules the weekly AI digest (`AI_DIGEST_CRON`) and daily backup (`BACKUP_CRON`).
 
 ### Environment
@@ -23,13 +45,13 @@ Stop: `docker compose down`. Rebuild after code changes: `docker compose up --bu
 | Variable | Default | Purpose |
 |---|---|---|
 | `PORT` | 4000 | HTTP port |
-| `DATABASE_URL` | `./data/homefinance.sqlite` | SQLite path (mounted volume) |
+| `DATABASE_URL` | `./data/homefinance.sqlite` | SQLite path — container overrides to `/data/homefinance.sqlite` (named volume `homefinance-db`) |
 | `AI_ENABLED` | true | master switch for AI features |
 | `AI_BASE_URL` | `https://ollama.com/v1` | Ollama Cloud (OpenAI-compatible) base URL |
 | `AI_API_KEY` | — | required for AI calls; stored server-side only |
 | `AI_MODEL` | llama3.1 | model id |
 | `AI_DIGEST_CRON` | `0 7 * * 1` | weekly digest schedule |
-| `BACKUP_DIR` | `./backups` | backup directory (mounted volume) |
+| `BACKUP_DIR` | `./backups` | backup directory — container overrides to `/backups` (named volume `homefinance-backups`) |
 | `BACKUP_CRON` | `0 3 * * *` | daily backup schedule |
 | `BACKUP_KEEP` | 14 | backups to retain (rotation) |
 
@@ -41,12 +63,18 @@ Stop: `docker compose down`. Rebuild after code changes: `docker compose up --bu
 
 Each backup is a copy of the SQLite file after a WAL checkpoint. Download from the UI or `GET /api/backups/:name/download`.
 
-**Restore:**
-1. Stop the app: `docker compose down`.
-2. Replace the file at `DATABASE_URL` (i.e. `./data/homefinance.sqlite`) with the downloaded backup.
-3. Restart: `docker compose up -d`.
+**Restore** (manual file-swap, the MVP mechanism — automated restore is on the v2 roadmap):
 
-(For an automated restore/point-in-time recovery UI, see the v2 roadmap; the manual file-swap is the MVP mechanism.)
+The DB lives in the named volume `homefinance-db` at `/data/homefinance.sqlite`. Two options:
+
+- **Via the volume** (recommended): stop the app, copy the backup file into the volume, restart.
+  ```bash
+  podman compose down
+  podman run --rm -v homefinance-db:/data -v "$PWD":/out alpine \
+    sh -c 'cp /out/<backup-name> /data/homefinance.sqlite'
+  podman compose up -d
+  ```
+- **Into a fresh volume** (if you removed the old one): recreate the volume, extract a volume tarball (see the volume-management block above), then `podman compose up -d`.
 
 ## Local dev without Docker
 
@@ -86,5 +114,5 @@ With a Traefik labels-based setup, define an entrypoint on `:443`, a Let's Encry
 
 - Keep `AI_API_KEY` and the SQLite data volume private; the API key never leaves the server.
 - Disable AI (`AI_ENABLED=false`) if you do not want any data (aggregates only) leaving your server.
-- Rotate backups off-host (e.g. sync `./backups` to object storage) for disaster recovery.
+- Rotate backups off-host (e.g. copy the `homefinance-backups` volume contents to object storage) for disaster recovery.
 - The `docs/deployment.md` VPS section is the canonical reference; update it as the deployment evolves.

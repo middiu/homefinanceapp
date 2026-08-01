@@ -23,7 +23,7 @@ FROM node:22-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 ENV DATABASE_URL=/data/homefinance.sqlite
-ENV BACKUP_DIR=/data/backups
+ENV BACKUP_DIR=/backups
 
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/client/node_modules ./client/node_modules
