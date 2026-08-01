@@ -1,23 +1,36 @@
 import { useState } from 'react';
+import { useDispatch } from 'react-redux';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, Legend, CartesianGrid, Line, ComposedChart, Area } from 'recharts';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/select';
 import { Sparkles, ArrowRight } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { useGetOverviewQuery, useGenerateInsightMutation, useListAccountsQuery, useListMembersQuery, useUpdateTransactionMutation } from '@/app/api';
+import { useGetOverviewQuery, useGenerateInsightMutation, useListAccountsQuery, useListMembersQuery, useUpdateTransactionMutation, api } from '@/app/api';
 import { PageHeader, StatCard, EmptyState, Money, DeltaBadge } from '@/components/common';
 import { CategorySelect } from '@/components/CategorySelect';
+import { JobProgressModal } from '@/components/JobProgressModal';
 import { formatAUD, formatDate, monthLabel, CHART_COLORS, pct } from '@/lib/utils';
 
 export default function OverviewPage() {
   const [range, setRange] = useState('current');
+  const [insightJobId, setInsightJobId] = useState<string | null>(null);
   const navigate = useNavigate();
+  const dispatch = useDispatch();
   const { data, isLoading } = useGetOverviewQuery({});
   const { data: accounts } = useListAccountsQuery();
   const { data: members } = useListMembersQuery();
   const [generateInsight] = useGenerateInsightMutation();
   const [updateTx] = useUpdateTransactionMutation();
+
+  async function startInsight() {
+    try {
+      const r: any = await generateInsight({ scope: 'household' });
+      setInsightJobId(r.data?.jobId ?? null);
+    } catch {
+      /* surfaced via modal error */
+    }
+  }
 
   if (isLoading || !data) return <div className="text-muted-foreground">Loading dashboard…</div>;
 
@@ -43,7 +56,7 @@ export default function OverviewPage() {
               <option value="12">12 months</option>
               <option value="ytd">YTD</option>
             </Select>
-            <Button variant="outline" size="sm" onClick={() => generateInsight({ scope: 'household' })}>
+            <Button variant="outline" size="sm" onClick={startInsight}>
               <Sparkles className="h-4 w-4" /> New insight
             </Button>
           </>
@@ -126,7 +139,7 @@ export default function OverviewPage() {
             ) : (
               <EmptyState message="No insight yet. Click “New insight”." icon={<Sparkles className="h-6 w-6" />} />
             )}
-            <Button variant="outline" size="sm" className="mt-3" onClick={() => generateInsight({ scope: 'household' })}>
+            <Button variant="outline" size="sm" className="mt-3" onClick={startInsight}>
               <Sparkles className="h-4 w-4" /> Generate
             </Button>
           </CardContent>
@@ -211,6 +224,13 @@ export default function OverviewPage() {
           )}
         </CardContent>
       </Card>
+
+      <JobProgressModal
+        jobId={insightJobId}
+        title="Generating insight"
+        onDone={() => dispatch(api.util.invalidateTags(['Insight']))}
+        onClose={() => setInsightJobId(null)}
+      />
     </div>
   );
 }

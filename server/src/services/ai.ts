@@ -5,9 +5,45 @@ import { eq } from 'drizzle-orm';
 import type { InsightType } from '@homefinance/shared';
 import { OLLAMA_CLOUD_MODELS } from '@homefinance/shared';
 import { matchRule, deriveMatchPattern, createOrUpdateAiRule, getActiveRules } from './rules.js';
+import { Ollama } from 'ollama';
+import { updateJob } from './jobs.js';
+
+// ---- Privacy: sanitize before sending to cloud model (§4.5) ----
+// The AI provider is a remote cloud service. Only the bare minimum needed for
+// categorization may leave the server: a merchant/shop descriptor + the amount.
+// Strip anything that could be sensitive banking info or personal data:
+//   - account/card/reference numbers (runs of 4+ digits, BSB, card groups)
+//   - long numeric identifiers
+// Collapses whitespace and caps length. Merchant words are preserved (needed to
+// identify the shop). Note: a free-text transfer memo may still contain a
+// recipient name — transfers are therefore skipped for AI (see recategorize).
+const SENSITIVE_PATTERNS: RegExp[] = [
+  /\b\d{3}[- ]?\d{3}\b/g, // BSB (6 digits, optional hyphen/space)
+  /\b(?:\d[ -]?){13,19}\b/g, // card numbers (13–19 digits with separators)
+  /\d{4,}/g, // any other run of 4+ digits (account/ref/transaction ids)
+];
+
+export function sanitizeForAi(desc: string): string {
+  let s = (desc || '').replace(/\s+/g, ' ').trim();
+  for (const re of SENSITIVE_PATTERNS) s = s.replace(re, '');
+  // collapse whitespace left by redactions, drop stray separators
+  s = s.replace(/\s*[|/-]+\s*/g, ' ').replace(/\s+/g, ' ').trim();
+  return s.slice(0, 80);
+}
+
+/** Emit a progress stage to a job (no-op if no jobId). */
+function jobStage(jobId: string | undefined, stage: string, progress: number, total?: number, message = ''): void {
+  if (!jobId) return;
+  const patch: { stage: string; progress: number; message: string; total?: number } = { stage, progress, message };
+  if (total !== undefined) patch.total = total;
+  updateJob(jobId, patch);
+}
 
 // ---- Provider abstraction (§3.5 / §4.1) ----
-// Default: Ollama Cloud (OpenAI-compatible /chat/completions). Swappable via config.
+// Uses the official ollama-js client against an Ollama host (Ollama Cloud at
+// https://ollama.com by default, or a local/remote Ollama server). The native
+// /api/chat endpoint is used (not the OpenAI-compatible /v1), which also enables
+// ollama.webSearch() for merchant lookups during categorization.
 interface AiProvider {
   chat(prompt: string, system?: string): Promise<string>;
 }
@@ -38,34 +74,58 @@ export function isAutoCategorizeEnabled(): boolean {
   return isAiEnabled();
 }
 
+/** Normalize an Ollama host URL. The legacy default was the OpenAI-compatible
+ *  `https://ollama.com/v1`; the native ollama-js client wants the bare host
+ *  (no `/v1`, no trailing slash). */
+export function normalizeHost(url: string): string {
+  let h = (url || '').trim();
+  h = h.replace(/\/v1\/?$/i, '');
+  h = h.replace(/\/+$/, '');
+  return h || 'https://ollama.com';
+}
+
+/** Build an ollama-js client from current settings/env. */
+export function getOllamaClient(): Ollama {
+  const cfg = aiConfig();
+  return new Ollama({
+    host: normalizeHost(cfg.baseUrl),
+    headers: cfg.apiKey ? { Authorization: `Bearer ${cfg.apiKey}` } : {},
+  });
+}
+
 class OllamaCloudProvider implements AiProvider {
   async chat(prompt: string, system?: string): Promise<string> {
     const cfg = aiConfig();
     if (!cfg.enabled || !cfg.apiKey) throw new Error('AI not configured (missing API key or disabled)');
-    const url = `${cfg.baseUrl.replace(/\/$/, '')}/chat/completions`;
+    const client = getOllamaClient();
     const messages = [
       ...(system ? [{ role: 'system', content: system }] : []),
       { role: 'user', content: prompt },
     ];
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${cfg.apiKey}`,
-      },
-      body: JSON.stringify({ model: cfg.model, messages, stream: false }),
-    });
-    if (!resp.ok) {
-      const txt = await resp.text().catch(() => '');
-      throw new Error(`AI provider error ${resp.status}: ${txt.slice(0, 200)}`);
-    }
-    const data = (await resp.json()) as any;
-    return data?.choices?.[0]?.message?.content?.trim() || '';
+    const resp = await client.chat({ model: cfg.model, messages, stream: false });
+    return resp.message?.content?.trim() || '';
   }
 }
 
 export function getProvider(): AiProvider {
   return new OllamaCloudProvider();
+}
+
+/** Web search via Ollama (ollama-js). Hosted at ollama.com regardless of client
+ *  host; requires an API key. Returns concatenated result snippets (merchant
+ *  context for categorization). Returns '' on failure so categorization degrades
+ *  gracefully without search context. */
+export async function aiWebSearch(query: string, maxResults = 3): Promise<string> {
+  const cfg = aiConfig();
+  if (!cfg.enabled || !cfg.apiKey) return '';
+  try {
+    const client = getOllamaClient();
+    const res = await client.webSearch({ query, maxResults });
+    return (res.results || []).map((r) => r.content).join('\n').trim();
+  } catch (e) {
+    console.warn('[ai] webSearch failed for', query, (e as Error).message);
+    return '';
+  }
 }
 
 // ---- Aggregation helpers (only send aggregates to AI, not raw dumps §4.5) ----
@@ -98,8 +158,9 @@ function iso(d: Date): string {
 }
 
 // ---- Insight generation ----
-export async function generateInsight(scope: string = 'household'): Promise<{ id: string; content: string }> {
+export async function generateInsight(scope: string = 'household', jobId?: string): Promise<{ id: string; content: string }> {
   if (!isAiEnabled()) return { id: '', content: 'AI is disabled or not configured. Set an API key in Settings.' };
+  jobStage(jobId, 'Aggregating household data', 1, 3);
   const months = [monthRange(1), monthRange(6)];
   const cur = categoryTotals(months[0].start, months[0].end);
   const hist = categoryTotals(months[1].start, months[1].end);
@@ -108,8 +169,10 @@ export async function generateInsight(scope: string = 'household'): Promise<{ id
     currentMonth: { income: cur.income, expense: cur.expense, byCategory: Object.fromEntries(cur.byCat) },
     trailing6Months: { income: hist.income, expense: hist.expense, byCategory: Object.fromEntries(hist.byCat) },
   };
+  jobStage(jobId, 'Generating insight with AI', 2, 3);
   const prompt = `You are a personal finance assistant. Based on the following aggregated household spending data (AUD), write a concise natural-language insight (2-4 sentences) highlighting notable changes, e.g. "You spent 20% more on dining this month than your 6-month average." Be specific and advisory. Data:\n${JSON.stringify(agg)}`;
   const content = await getProvider().chat(prompt, 'You are a concise, friendly household finance advisor.');
+  jobStage(jobId, 'Saving insight', 3, 3);
   const id = uid();
   getDb()
     .insert(schema.aiInsights)
@@ -154,11 +217,14 @@ export function statisticalForecast(categoryId: string | null, monthsAhead = 3):
   return out;
 }
 
-export async function generateForecast(scope: string = 'household'): Promise<{ id: string; content: string; projection: { month: string; projected: number }[] }> {
+export async function generateForecast(scope: string = 'household', jobId?: string): Promise<{ id: string; content: string; projection: { month: string; projected: number }[] }> {
+  jobStage(jobId, 'Computing statistical projection', 1, 3);
   const projection = statisticalForecast(null, 3);
   if (!isAiEnabled()) return { id: '', content: 'AI disabled. Showing statistical projection only.', projection };
+  jobStage(jobId, 'Generating forecast narrative with AI', 2, 3);
   const prompt = `You are a household finance assistant. Here is a statistical 3-month cash-flow projection (net amount per month, AUD): ${JSON.stringify(projection)}. Write a 2-3 sentence narrative explaining the trend and any cautionary note. Advisory only.`;
   const content = await getProvider().chat(prompt, 'You are a concise household finance forecaster.');
+  jobStage(jobId, 'Saving forecast', 3, 3);
   const id = uid();
   getDb()
     .insert(schema.aiInsights)
@@ -261,15 +327,11 @@ export function latestInsight(scope: string = 'household') {
 export async function listCloudModels(): Promise<{ models: string[]; raw?: any[]; error?: string }> {
   const cfg = aiConfig();
   if (!cfg.apiKey) return { models: [], error: 'No API key configured' };
-  const url = `${cfg.baseUrl.replace(/\/$/, '')}/models`;
   try {
-    const resp = await fetch(url, { method: 'GET', headers: { Authorization: `Bearer ${cfg.apiKey}` } });
-    if (!resp.ok) {
-      return { models: [], error: `Model list fetch failed (${resp.status})` };
-    }
-    const data = (await resp.json()) as any;
-    const raw: any[] = data?.data ?? data?.models ?? [];
-    const ids: string[] = raw.map((m: any) => (typeof m === 'string' ? m : m.id || m.name)).filter(Boolean);
+    const client = getOllamaClient();
+    const data = await client.list();
+    const raw: any[] = data?.models ?? [];
+    const ids: string[] = raw.map((m: any) => (typeof m === 'string' ? m : m.name || m.model)).filter(Boolean);
     // Filter to cloud-hosted allow-list (§5.2) — keep order of allow-list, only those present.
     const present = new Set(ids.map((id) => id.toLowerCase()));
     const filtered = OLLAMA_CLOUD_MODELS.filter((m) => present.has(m.toLowerCase()));
@@ -301,27 +363,19 @@ export async function testConnection(override?: { baseUrl?: string; apiKey?: str
   }
   const start = Date.now();
   try {
-    const resp = await fetch(`${baseUrl.replace(/\/$/, '')}/models`, { method: 'GET', headers: { Authorization: `Bearer ${apiKey}` } });
+    const client = new Ollama({ host: normalizeHost(baseUrl), headers: { Authorization: `Bearer ${apiKey}` } });
+    const data = await client.list();
     const latencyMs = Date.now() - start;
-    if (resp.status === 401 || resp.status === 403) {
-      await logTest('failure', latencyMs, 'auth');
-      return { ok: false, latencyMs, errorCategory: 'auth', message: `Authentication failed (${resp.status}). Check your API key.`, testedAt };
-    }
-    if (!resp.ok) {
-      await logTest('failure', latencyMs, 'unexpected');
-      return { ok: false, latencyMs, errorCategory: 'unexpected', message: `Unexpected response: HTTP ${resp.status}`, testedAt };
-    }
-    const data = (await resp.json()) as any;
-    const raw: any[] = data?.data ?? data?.models ?? [];
-    const ids: string[] = raw.map((m: any) => (typeof m === 'string' ? m : m.id || m.name)).filter(Boolean);
+    const raw: any[] = data?.models ?? [];
+    const ids: string[] = raw.map((m: any) => (typeof m === 'string' ? m : m.name || m.model)).filter(Boolean);
     const present = new Set(ids.map((id) => id.toLowerCase()));
     const models = OLLAMA_CLOUD_MODELS.filter((m) => present.has(m.toLowerCase()));
     await logTest('success', latencyMs, null);
     return { ok: true, latencyMs, errorCategory: null, message: `Connection OK. ${models.length} cloud model(s) available.`, models, testedAt };
   } catch (e) {
     const latencyMs = Date.now() - start;
-    const msg = (e as Error).message;
-    const category = /ENOTFOUND|ECONNREFUSED|fetch failed|network|timeout/i.test(msg) ? 'network' : 'unexpected';
+    const msg = (e as Error).message || String(e);
+    const category = /401|403|auth|unauthor/i.test(msg) ? 'auth' : /ENOTFOUND|ECONNREFUSED|fetch failed|network|timeout/i.test(msg) ? 'network' : 'unexpected';
     await logTest('failure', latencyMs, category);
     return { ok: false, latencyMs, errorCategory: category as any, message: msg, testedAt };
   }
@@ -359,7 +413,11 @@ export interface CategorizeItem {
  *  - Falls back to "Other" with needsReview=true on any failure.
  *  Only sends description + amount (privacy §4.5). Never account numbers/balances.
  *  Returns the number of transactions AI categorized. */
-export async function categorizeBatch(items: CategorizeItem[], batchId: string): Promise<{ categorized: number; aiCalls: number }> {
+export async function categorizeBatch(
+  items: CategorizeItem[],
+  batchId: string,
+  opts?: { jobId?: string; useWebSearch?: boolean; progressBase?: number; jobTotal?: number },
+): Promise<{ categorized: number; aiCalls: number }> {
   const d = getDb();
   const cats = d.select().from(schema.categories).all();
   const catByName = new Map(cats.map((c) => [c.name.toLowerCase(), c]));
@@ -368,19 +426,41 @@ export async function categorizeBatch(items: CategorizeItem[], batchId: string):
   const BATCH = 25;
   let categorized = 0;
   let aiCalls = 0;
+  let processed = 0;
+  const useWeb = !!opts?.useWebSearch && isAiEnabled();
+  const jobTotal = opts?.jobTotal ?? items.length;
+  const progressBase = opts?.progressBase ?? 0;
+  const report = (stage: string, processedNow: number) => jobStage(opts?.jobId, stage, progressBase + processedNow, jobTotal);
 
   for (let i = 0; i < items.length; i += BATCH) {
     const slice = items.slice(i, i + BATCH);
     aiCalls++;
-    const lines = slice.map((it, idx) => `${idx + 1}. "${it.rawDescription}" (amount: ${it.amount} AUD)`);
-    const prompt = `You are categorizing bank transactions for an Australian household. For each transaction below, choose the single best category from this list: ${catList}. Reply with one line per transaction in the format "N|category_name" where N is the transaction number. Use ONLY category names from the list.\n\nTransactions:\n${lines.join('\n')}`;
+    // Optional web search to identify the merchant for each unique description.
+    // Privacy: search only the sanitized descriptor (no account/ref numbers).
+    const webCtx = new Map<string, string>();
+    if (useWeb) {
+      const uniq = [...new Set(slice.map((it) => sanitizeForAi(it.rawDescription)))];
+      report(`Web-searching ${uniq.length} merchant(s) — batch ${Math.floor(i / BATCH) + 1}`, processed);
+      for (const desc of uniq) {
+        const snippet = await aiWebSearch(`${desc} merchant shop australia`);
+        if (snippet) webCtx.set(desc, snippet.slice(0, 400));
+      }
+    } else {
+      report(`AI categorizing batch ${Math.floor(i / BATCH) + 1}`, processed);
+    }
+    const lines = slice.map((it, idx) => {
+      const safe = sanitizeForAi(it.rawDescription);
+      const ctx = webCtx.get(safe);
+      return ctx
+        ? `${idx + 1}. "${safe}" (amount: ${it.amount} AUD) [web context: ${ctx}]`
+        : `${idx + 1}. "${safe}" (amount: ${it.amount} AUD)`;
+    });
+    const prompt = `You are categorizing bank transactions for an Australian household. For each transaction below, choose the single best category from this list: ${catList}. When web context is provided, use it to identify the merchant/shop and infer the category. Reply with one line per transaction in the format "N|category_name" where N is the transaction number. Use ONLY category names from the list.\n\nTransactions:\n${lines.join('\n')}`;
     let parsed: Record<number, string> = {};
-    let batchOk = false;
     try {
       if (isAiEnabled()) {
         const out = await getProvider().chat(prompt, 'You are a precise transaction categorizer. Reply only with the numbered list, no prose.');
         parsed = parseCategoryResponse(out);
-        batchOk = true;
       }
     } catch (e) {
       // batch failed — fall back per-item to Other below
@@ -417,8 +497,73 @@ export async function categorizeBatch(items: CategorizeItem[], batchId: string):
         })
         .run();
     }
+    processed += slice.length;
+    report(`Processed ${processed}/${items.length}`, processed);
   }
   return { categorized, aiCalls };
+}
+
+/** Re-categorize a set (or all) of transactions against the current rule engine,
+ *  then send anything unmatched to AI for categorization (with optional web
+ *  search to identify the merchant). Rule-matched transactions are set to
+ *  source='rule', needsReview=false; AI-matched to source='ai_auto',
+ *  needsReview=true and an ai_generated rule is created/updated. Emits progress
+ *  to `jobId` across the whole run. */
+export async function recategorizeTransactions(opts: { ids?: string[]; useWebSearch: boolean }, jobId: string): Promise<{
+  total: number;
+  rulesApplied: number;
+  aiCategorized: number;
+  aiCalls: number;
+}> {
+  const d = getDb();
+  const rules = getActiveRules();
+  let txns = d.select().from(schema.transactions).all();
+  if (opts.ids?.length) {
+    const idSet = new Set(opts.ids);
+    txns = txns.filter((t) => idSet.has(t.id));
+  }
+  // Privacy: transfers are internal movement, not merchant spend — their memos
+  // may contain recipient names/bank strings. Skip them for AI; rule engine
+  // still applies (transfer category rules are unaffected).
+  txns = txns.filter((t) => !t.isTransfer);
+  const total = txns.length;
+  if (!total) {
+    jobStage(jobId, 'No transactions selected', 0, 0);
+    return { total: 0, rulesApplied: 0, aiCategorized: 0, aiCalls: 0 };
+  }
+  jobStage(jobId, 'Applying current rules', 0, total);
+  const unmatched: CategorizeItem[] = [];
+  let rulesApplied = 0;
+  let i = 0;
+  for (const t of txns) {
+    const desc = t.rawDescription || t.description;
+    const cid = matchRule(desc, t.amount, rules);
+    if (cid) {
+      d.update(schema.transactions).set({ categoryId: cid, source: 'rule', needsReview: false }).where(eq(schema.transactions.id, t.id)).run();
+      rulesApplied++;
+    } else {
+      unmatched.push({ id: t.id, rawDescription: desc, amount: t.amount });
+    }
+    i++;
+    if (i % 25 === 0) jobStage(jobId, `Applying rules ${i}/${total}`, i, total);
+  }
+  jobStage(jobId, `Rules matched ${rulesApplied}; ${unmatched.length} need AI`, rulesApplied, total);
+
+  let aiCategorized = 0;
+  let aiCalls = 0;
+  if (unmatched.length) {
+    const r = await categorizeBatch(unmatched, `recategorize-${jobId}`, {
+      jobId,
+      useWebSearch: opts.useWebSearch,
+      progressBase: rulesApplied,
+      jobTotal: total,
+    });
+    aiCategorized = r.categorized;
+    aiCalls = r.aiCalls;
+  } else {
+    jobStage(jobId, 'Nothing needed AI — all matched by rules', total, total);
+  }
+  return { total, rulesApplied, aiCategorized, aiCalls };
 }
 
 function parseCategoryResponse(out: string): Record<number, string> {
@@ -448,13 +593,14 @@ function addMonth(d: Date, n: number): Date {
   return new Date(d.getFullYear(), d.getMonth() + n, 1);
 }
 
-export async function buildForecastReport(filter?: { accountId?: string[]; memberId?: string[] }): Promise<{
+export async function buildForecastReport(filter?: { accountId?: string[]; memberId?: string[] }, jobId?: string): Promise<{
   history: { month: string; income: number; expense: number; net: number; actual: true }[];
   forecast: { month: string; income: number; expense: number; net: number; cumulative: number; actual: false }[];
   recurring: { description: string; amount: number; monthly: number }[];
   narrative: string;
 }> {
   const d = getDb();
+  jobStage(jobId, 'Loading transactions', 1, 4);
   let txns = d.select().from(schema.transactions).all().filter((t) => !t.isTransfer);
   if (filter?.accountId?.length) txns = txns.filter((t) => filter.accountId!.includes(t.accountId));
 
@@ -477,6 +623,7 @@ export async function buildForecastReport(filter?: { accountId?: string[]; membe
   });
 
   // Recurring items (subscriptions) — fold as fixed monthly line items (§8.2).
+  jobStage(jobId, 'Detecting recurring charges', 2, 4);
   const subs = detectSubscriptions();
   const recurring = subs.map((s) => {
     // estimate monthly amount from count over observed window
@@ -507,6 +654,7 @@ export async function buildForecastReport(filter?: { accountId?: string[]; membe
   let narrative = 'AI disabled — statistical projection only. Configure an API key in AI Settings for a narrative.';
   try {
     if (isAiEnabled()) {
+      jobStage(jobId, 'Generating AI narrative', 3, 4);
       const totalNet = forecast.reduce((s, f) => s + f.net, 0);
       const lowestCum = Math.min(...forecast.map((f) => f.cumulative));
       const prompt = `You are a household finance forecaster. Here is a 12-month forecast (AUD) based on the trailing 12 months of history. Net per month: ${JSON.stringify(forecast.map((f) => f.net))}. Cumulative balance projection: ${JSON.stringify(forecast.map((f) => f.cumulative))}. Total forecast net over 12 months: ${totalNet.toFixed(2)}. Lowest cumulative point: ${lowestCum.toFixed(2)}. Write 2-4 sentences noting key trends (income vs expense), any month the cumulative balance may go negative, and seasonal patterns. Advisory only.`;
@@ -515,6 +663,7 @@ export async function buildForecastReport(filter?: { accountId?: string[]; membe
   } catch (e) {
     narrative = `AI narrative unavailable: ${(e as Error).message}`;
   }
+  jobStage(jobId, 'Finalizing report', 4, 4);
 
   return { history, forecast, recurring, narrative };
 }

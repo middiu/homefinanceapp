@@ -1,9 +1,11 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { eq } from 'drizzle-orm';
-import { getDb, schema } from '../db/index.js';
-import { paged, createManual, bulkCategorize, mapTx, categorizeViaRules, markReviewed } from '../services/transactions.js';
+import { getDb, schema, getSqlite } from '../db/index.js';
+import { paged, createManual, bulkCategorize, mapTx, categorizeViaRules, markReviewed, deleteAllTransactions } from '../services/transactions.js';
+import { recategorizeTransactions } from '../services/ai.js';
 import { manualLink, manualUnlink } from '../services/transfers.js';
+import { createJob, finishJob, failJob } from '../services/jobs.js';
 import type { CategorySource } from '@homefinance/shared';
 
 const router = Router();
@@ -124,6 +126,30 @@ router.post('/:id/unlink', (req, res) => {
   } catch (e) {
     res.status(400).json({ error: (e as Error).message });
   }
+});
+
+// Re-categorize selected (or all) transactions: rules first, then AI for the rest.
+// Optional web search to identify merchants. Runs as a job; progress via SSE.
+router.post('/recategorize', (req, res) => {
+  const parsed = z
+    .object({ ids: z.array(z.string()).optional(), useWebSearch: z.boolean().default(true) })
+    .safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const job = createJob('recategorize', 0);
+  recategorizeTransactions(parsed.data, job.id)
+    .then((r) => finishJob(job.id, r))
+    .catch((e) => failJob(job.id, (e as Error).message));
+  res.status(202).json({ jobId: job.id });
+});
+
+// Delete ALL transactions (irreversible). Wipes transactions + AI categorization
+// log. Keeps accounts, categories, rules, and import-batch metadata. The
+// `confirm` body must equal 'DELETE' as a server-side guard.
+router.delete('/', (req, res) => {
+  const parsed = z.object({ confirm: z.literal('DELETE') }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Confirmation required: send { confirm: "DELETE" }' });
+  deleteAllTransactions();
+  res.json({ ok: true });
 });
 
 export default router;

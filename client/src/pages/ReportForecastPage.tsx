@@ -5,19 +5,21 @@ import { Button } from '@/components/ui/button';
 import { Sparkles, AlertTriangle } from 'lucide-react';
 import { useGenerateForecastReportMutation } from '@/app/api';
 import { PageHeader, EmptyState } from '@/components/common';
+import { JobProgressModal } from '@/components/JobProgressModal';
 import { formatAUD, monthLabel } from '@/lib/utils';
 
 export default function ReportForecastPage() {
   const [report, setReport] = useState<any>(null);
-  const [gen, { isLoading }] = useGenerateForecastReportMutation();
+  const [gen] = useGenerateForecastReportMutation();
   const [err, setErr] = useState('');
+  const [jobId, setJobId] = useState<string | null>(null);
 
   async function generate() {
     setErr('');
     try {
       const r: any = await gen({});
       if (r.error) setErr(r.error);
-      else setReport(r.data);
+      else setJobId(r.data?.jobId ?? null);
     } catch (e: any) { setErr(e?.data?.error ?? e?.message ?? 'forecast failed'); }
   }
 
@@ -28,14 +30,14 @@ export default function ReportForecastPage() {
       <PageHeader
         title="12-Month Forecast"
         subtitle="AI-projected cash flow from your transaction history & recurring patterns"
-        actions={<Button size="sm" onClick={generate} disabled={isLoading}><Sparkles className="h-4 w-4" /> {isLoading ? 'Generating…' : 'Generate forecast'}</Button>}
+        actions={<Button size="sm" onClick={generate} disabled={!!jobId}><Sparkles className="h-4 w-4" /> {jobId ? 'Generating…' : 'Generate forecast'}</Button>}
       />
 
       {err && <p className="mb-3 text-sm text-red-400"><AlertTriangle className="mr-1 inline h-3.5 w-3.5" />{err}</p>}
 
-      {!report && !isLoading && <EmptyState message="Click Generate to produce a 12-month forecast. Requires AI enabled in AI & Insights." icon={<Sparkles className="h-6 w-6" />} />}
+      {!report && !jobId && <EmptyState message="Click Generate to produce a 12-month forecast. Requires AI enabled in AI & Insights." icon={<Sparkles className="h-6 w-6" />} />}
 
-      {isLoading && !report && <p className="text-muted-foreground">Generating forecast…</p>}
+      {jobId && !report && <p className="text-muted-foreground">Generating forecast…</p>}
 
       {report && (
         <>
@@ -106,6 +108,12 @@ export default function ReportForecastPage() {
           </Card>
         </>
       )}
+      <JobProgressModal
+        jobId={jobId}
+        title="Generating forecast"
+        onDone={(result) => { setReport(result); setErr(''); }}
+        onClose={() => setJobId(null)}
+      />
     </div>
   );
 }

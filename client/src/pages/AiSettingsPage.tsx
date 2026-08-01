@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useDispatch } from 'react-redux';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -8,13 +9,15 @@ import { Select } from '@/components/ui/select';
 import { Sparkles, Zap, Activity, AlertTriangle, CheckCircle2, XCircle } from 'lucide-react';
 import {
   useGetAiConfigQuery, useUpdateAiConfigMutation, useAiStatusQuery, useGenerateInsightMutation, useLatestInsightQuery,
-  useListCloudModelsQuery, useTestConnectionMutation, useTestHistoryQuery,
+  useListCloudModelsQuery, useTestConnectionMutation, useTestHistoryQuery, api,
 } from '@/app/api';
 import { PageHeader } from '@/components/common';
+import { JobProgressModal } from '@/components/JobProgressModal';
 import { formatDate } from '@/lib/utils';
 import type { AiConnectionTestResult } from '@homefinance/shared';
 
 export default function AiSettingsPage() {
+  const dispatch = useDispatch();
   const { data } = useGetAiConfigQuery();
   const { data: status } = useAiStatusQuery();
   const [update] = useUpdateAiConfigMutation();
@@ -26,6 +29,16 @@ export default function AiSettingsPage() {
   const [form, setForm] = useState<any>(null);
   const [testResult, setTestResult] = useState<AiConnectionTestResult | null>(null);
   const [testErr, setTestErr] = useState('');
+  const [insightJobId, setInsightJobId] = useState<string | null>(null);
+
+  async function startInsight() {
+    try {
+      const r: any = await generate({ scope: 'household' });
+      setInsightJobId(r.data?.jobId ?? null);
+    } catch {
+      /* surfaced via modal */
+    }
+  }
 
   const cfg = form ?? data;
   const models = modelsRes?.models ?? [];
@@ -136,7 +149,7 @@ export default function AiSettingsPage() {
                 <p className="text-xs text-muted-foreground">{new Date(insight.generatedAt).toLocaleString('en-AU')}</p>
               </div>
             ) : <p className="text-sm text-muted-foreground">No insight generated yet.</p>}
-            <Button variant="outline" size="sm" className="mt-3" onClick={() => generate({ scope: 'household' })}><Sparkles className="h-4 w-4" /> Generate now</Button>
+            <Button variant="outline" size="sm" className="mt-3" onClick={startInsight}><Sparkles className="h-4 w-4" /> Generate now</Button>
           </CardContent>
         </Card>
 
@@ -149,6 +162,13 @@ export default function AiSettingsPage() {
           </CardContent>
         </Card>
       </div>
+
+      <JobProgressModal
+        jobId={insightJobId}
+        title="Generating insight"
+        onDone={() => dispatch(api.util.invalidateTags(['Insight']))}
+        onClose={() => setInsightJobId(null)}
+      />
     </div>
   );
 }

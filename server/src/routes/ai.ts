@@ -15,19 +15,19 @@ import {
 } from '../services/ai.js';
 import { getDb, schema } from '../db/index.js';
 import { uid } from '../utils.js';
+import { createJob, updateJob, finishJob, failJob, getJob, jobEmitter, snapshot } from '../services/jobs.js';
 import type { InsightType, RuleMatchType } from '@homefinance/shared';
 
 const router = Router();
 
 // On-demand insight for a scope (household | member:<id> | account:<id>)
-router.post('/insight', async (req, res) => {
+router.post('/insight', (req, res) => {
   const scope = (req.body.scope as string) || 'household';
-  try {
-    const r = await generateInsight(scope);
-    res.json(r);
-  } catch (e) {
-    res.status(502).json({ error: (e as Error).message });
-  }
+  const job = createJob('insight', 3);
+  generateInsight(scope, job.id)
+    .then((r) => finishJob(job.id, r))
+    .catch((e) => failJob(job.id, (e as Error).message));
+  res.status(202).json({ jobId: job.id });
 });
 
 router.get('/insight/latest', (req, res) => {
@@ -35,26 +35,65 @@ router.get('/insight/latest', (req, res) => {
   res.json(latestInsight(scope) || null);
 });
 
-router.post('/forecast', async (req, res) => {
+router.post('/forecast', (req, res) => {
   const scope = (req.body.scope as string) || 'household';
-  try {
-    const r = await generateForecast(scope);
-    res.json(r);
-  } catch (e) {
-    res.status(502).json({ error: (e as Error).message });
-  }
+  const job = createJob('forecast', 3);
+  generateForecast(scope, job.id)
+    .then((r) => finishJob(job.id, r))
+    .catch((e) => failJob(job.id, (e as Error).message));
+  res.status(202).json({ jobId: job.id });
 });
 
 // Phase 2 §8 — full 12-month forecast report (statistical + recurring + AI narrative).
-router.post('/forecast-report', async (req, res) => {
-  try {
-    const filter: { accountId?: string[]; memberId?: string[] } = {};
-    if (Array.isArray(req.body.accountId)) filter.accountId = req.body.accountId;
-    if (Array.isArray(req.body.memberId)) filter.memberId = req.body.memberId;
-    const r = await buildForecastReport(filter);
-    res.json(r);
-  } catch (e) {
-    res.status(500).json({ error: (e as Error).message });
+router.post('/forecast-report', (req, res) => {
+  const filter: { accountId?: string[]; memberId?: string[] } = {};
+  if (Array.isArray(req.body.accountId)) filter.accountId = req.body.accountId;
+  if (Array.isArray(req.body.memberId)) filter.memberId = req.body.memberId;
+  const job = createJob('forecast-report', 4);
+  buildForecastReport(filter, job.id)
+    .then((r) => finishJob(job.id, r))
+    .catch((e) => failJob(job.id, (e as Error).message));
+  res.status(202).json({ jobId: job.id });
+});
+
+// ---- Job progress (poll + SSE) ----
+router.get('/jobs/:id', (req, res) => {
+  const job = getJob(req.params.id);
+  if (!job) return res.status(404).json({ error: 'job not found' });
+  res.json(snapshot(job));
+});
+
+router.get('/jobs/:id/events', (req, res) => {
+  const job = getJob(req.params.id);
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  res.write(`retry: 2000\n\n`);
+  const send = (event: string, data: unknown) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  if (!job) {
+    send('error', { error: 'job not found' });
+    res.end();
+    return;
+  }
+  send('progress', snapshot(job));
+  const em = jobEmitter(req.params.id);
+  if (em) {
+    const onProgress = (d: unknown) => send('progress', d);
+    const onDone = (d: unknown) => {
+      send('done', d);
+      res.end();
+    };
+    em.on('progress', onProgress);
+    em.on('done', onDone);
+    // If already terminal before subscribe, flush.
+    if (job.status !== 'running') onDone(snapshot(job));
+    req.on('close', () => {
+      em.off('progress', onProgress);
+      em.off('done', onDone);
+    });
   }
 });
 

@@ -8,6 +8,7 @@ import { Sparkles } from 'lucide-react';
 import { useGetDeepDiveQuery, useListMembersQuery, useListAccountsQuery, useGenerateForecastMutation, useListSubscriptionsQuery, useListAnomaliesQuery, useUpdateTransactionMutation } from '@/app/api';
 import { PageHeader, EmptyState, Money, DeltaBadge } from '@/components/common';
 import { CategorySelect } from '@/components/CategorySelect';
+import { JobProgressModal } from '@/components/JobProgressModal';
 import { formatAUD, formatDate, monthLabel, CHART_COLORS } from '@/lib/utils';
 
 export default function DeepDivePage() {
@@ -20,6 +21,16 @@ export default function DeepDivePage() {
   const { data, isLoading } = useGetDeepDiveQuery(query, { skip: !scopeId });
   const [generateForecast] = useGenerateForecastMutation();
   const [forecast, setForecast] = useState<any>(null);
+  const [forecastJobId, setForecastJobId] = useState<string | null>(null);
+
+  async function startForecast() {
+    try {
+      const r: any = await generateForecast(query);
+      setForecastJobId(r.data?.jobId ?? null);
+    } catch {
+      /* surfaced via modal */
+    }
+  }
   const { data: subs } = useListSubscriptionsQuery(scopeType === 'account' ? { accountId: scopeId } : {});
   const { data: anomalies } = useListAnomaliesQuery(scopeType === 'account' ? { accountId: scopeId } : {});
   const [updateTx] = useUpdateTransactionMutation();
@@ -48,7 +59,7 @@ export default function DeepDivePage() {
                 ? members?.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)
                 : accounts?.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
             </Select>
-            <Button variant="outline" size="sm" onClick={async () => { const r: any = await generateForecast(query); setForecast(r.data); }}>
+            <Button variant="outline" size="sm" onClick={startForecast}>
               <Sparkles className="h-4 w-4" /> Forecast
             </Button>
           </>
@@ -173,6 +184,12 @@ export default function DeepDivePage() {
             </div>
           </div>
         )}
+      <JobProgressModal
+        jobId={forecastJobId}
+        title="Generating forecast"
+        onDone={(result) => setForecast(result)}
+        onClose={() => setForecastJobId(null)}
+      />
     </div>
   );
 }

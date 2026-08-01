@@ -3,7 +3,7 @@ import { Table, THead, TBody, TR, TH, TD } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
-import { Download, Plus, Trash2, CheckCheck, Unlink } from 'lucide-react';
+import { Download, Plus, Trash2, CheckCheck, Unlink, Sparkles, AlertTriangle } from 'lucide-react';
 import {
   useListTransactionsQuery,
   useListAccountsQuery,
@@ -12,12 +12,18 @@ import {
   useUpdateTransactionMutation,
   useDeleteTransactionMutation,
   useBulkCategorizeMutation,
+  useRecategorizeMutation,
+  useDeleteAllTransactionsMutation,
   useMarkReviewedMutation,
   useUnlinkTransferMutation,
   useCreateTransactionMutation,
+  useAiStatusQuery,
+  api,
 } from '@/app/api';
+import { useDispatch } from 'react-redux';
 import { PageHeader, EmptyState, Money } from '@/components/common';
 import { CategorySelect, SourceBadge } from '@/components/CategorySelect';
+import { JobProgressModal } from '@/components/JobProgressModal';
 import { Badge } from '@/components/ui/badge';
 import { formatAUD, formatDate } from '@/lib/utils';
 
@@ -28,17 +34,49 @@ export default function TransactionsPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkCat, setBulkCat] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
+  const [recatOpen, setRecatOpen] = useState(false);
+  const [recatScope, setRecatScope] = useState<'selected' | 'all'>('selected');
+  const [recatWeb, setRecatWeb] = useState(true);
+  const [recatJobId, setRecatJobId] = useState<string | null>(null);
+  const [delAllOpen, setDelAllOpen] = useState(false);
+  const [delAllText, setDelAllText] = useState('');
+  const dispatch = useDispatch();
 
   const { data: accounts } = useListAccountsQuery();
   const { data: categories } = useListCategoriesQuery();
   const { data: members } = useListMembersQuery();
   const { data, isLoading } = useListTransactionsQuery(filters);
+  const { data: aiStatus } = useAiStatusQuery();
   const [updateTx] = useUpdateTransactionMutation();
   const [deleteTx] = useDeleteTransactionMutation();
   const [bulk] = useBulkCategorizeMutation();
+  const [recategorize] = useRecategorizeMutation();
+  const [deleteAll] = useDeleteAllTransactionsMutation();
   const [markReviewed] = useMarkReviewedMutation();
   const [unlink] = useUnlinkTransferMutation();
   const [createTx] = useCreateTransactionMutation();
+
+  async function startRecategorize() {
+    const ids = recatScope === 'selected' ? [...selected] : undefined;
+    setRecatOpen(false);
+    try {
+      const r: any = await recategorize({ ids, useWebSearch: recatWeb });
+      setRecatJobId(r.data?.jobId ?? null);
+    } catch {
+      /* surfaced via modal */
+    }
+  }
+
+  async function doDeleteAll() {
+    try {
+      await deleteAll();
+      setDelAllOpen(false);
+      setDelAllText('');
+      setSelected(new Set());
+    } catch {
+      /* keep dialog open on error */
+    }
+  }
 
   const rows = data?.items ?? [];
   const total = data?.total ?? 0;
@@ -84,7 +122,9 @@ export default function TransactionsPage() {
         subtitle={`${total} transaction${total === 1 ? '' : 's'}`}
         actions={
           <>
+            <Button variant="outline" size="sm" onClick={() => { setRecatScope(selected.size > 0 ? 'selected' : 'all'); setRecatOpen(true); }}><Sparkles className="h-4 w-4" /> Re-categorize</Button>
             <Button variant="outline" size="sm" onClick={exportCsv}><Download className="h-4 w-4" /> Export CSV</Button>
+            <Button variant="ghost" size="sm" className="text-red-400 hover:text-red-500" onClick={() => setDelAllOpen(true)}><Trash2 className="h-4 w-4" /> Delete all</Button>
             <Button size="sm" onClick={() => setShowAdd(true)}><Plus className="h-4 w-4" /> Add</Button>
           </>
         }
@@ -191,6 +231,54 @@ export default function TransactionsPage() {
       </div>
 
       {showAdd && <AddTransactionDialog onClose={() => setShowAdd(false)} onCreate={async (body) => { await createTx(body); setShowAdd(false); }} />}
+
+      {recatOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/60" onClick={() => setRecatOpen(false)} />
+          <div className="relative z-10 w-full max-w-md rounded-lg border border-border bg-card p-6">
+            <h2 className="mb-4 text-lg font-semibold">Re-categorize transactions</h2>
+            <div className="space-y-3 text-sm">
+              <p className="text-muted-foreground">Applies current rules first. Anything unmatched is sent to AI for categorization, optionally using web search to identify the merchant.</p>
+              <div className="flex flex-col gap-1">
+                <label className="flex items-center gap-2"><input type="radio" checked={recatScope === 'selected'} onChange={() => setRecatScope('selected')} disabled={selected.size === 0} /> Selected ({selected.size})</label>
+                <label className="flex items-center gap-2"><input type="radio" checked={recatScope === 'all'} onChange={() => setRecatScope('all')} /> All transactions ({total})</label>
+              </div>
+              <label className="flex items-center gap-2">
+                <input type="checkbox" checked={recatWeb} onChange={(e) => setRecatWeb(e.target.checked)} disabled={!aiStatus?.enabled} />
+                Use web search to identify merchants {aiStatus?.enabled ? '' : '(needs AI enabled)'}
+              </label>
+              {!aiStatus?.enabled && <p className="text-xs text-amber-500">AI is disabled — only rules will apply; unmatched transactions stay uncategorized.</p>}
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => setRecatOpen(false)}>Cancel</Button>
+              <Button onClick={startRecategorize} disabled={recatScope === 'selected' && selected.size === 0}>Run</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {delAllOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/60" />
+          <div className="relative z-10 w-full max-w-md rounded-lg border border-red-500/40 bg-card p-6">
+            <h2 className="mb-2 flex items-center gap-2 text-lg font-semibold text-red-400"><AlertTriangle className="h-5 w-5" /> Delete ALL transactions</h2>
+            <p className="mb-3 text-sm text-muted-foreground">This permanently deletes every transaction across all accounts. Accounts, categories, rules, and import-batch metadata are kept. This cannot be undone.</p>
+            <p className="mb-2 text-sm">Type <code className="rounded bg-muted px-1">DELETE</code> to confirm:</p>
+            <Input value={delAllText} onChange={(e) => setDelAllText(e.target.value)} placeholder="DELETE" autoFocus />
+            <div className="mt-4 flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => { setDelAllOpen(false); setDelAllText(''); }}>Cancel</Button>
+              <Button variant="ghost" className="text-red-400 hover:text-red-500" disabled={delAllText !== 'DELETE'} onClick={doDeleteAll}>Delete all</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <JobProgressModal
+        jobId={recatJobId}
+        title="Re-categorizing"
+        onDone={() => dispatch(api.util.invalidateTags(['Transaction', 'Rule']))}
+        onClose={() => setRecatJobId(null)}
+      />
     </div>
   );
 }

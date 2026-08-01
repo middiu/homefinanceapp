@@ -65,6 +65,13 @@ export const api = createApi({
       query: (body) => ({ url: '/transactions/bulk', method: 'POST', body }),
       invalidatesTags: ['Transaction'],
     }),
+    recategorize: b.mutation<{ jobId: string }, { ids?: string[]; useWebSearch?: boolean }>({
+      query: (body) => ({ url: '/transactions/recategorize', method: 'POST', body }),
+    }),
+    deleteAllTransactions: b.mutation<{ ok: true }, void>({
+      query: () => ({ url: '/transactions', method: 'DELETE', body: { confirm: 'DELETE' } }),
+      invalidatesTags: ['Transaction', 'ImportBatch'],
+    }),
     markReviewed: b.mutation<{ ok: true }, { ids: string[] }>({ query: (body) => ({ url: '/transactions/review', method: 'POST', body }), invalidatesTags: ['Transaction'] }),
     linkTransfer: b.mutation<{ ok: true }, { id: string; linkedTransactionId: string }>({ query: (body) => ({ url: `/transactions/${body.id}/link`, method: 'POST', body: { linkedTransactionId: body.linkedTransactionId } }), invalidatesTags: ['Transaction'] }),
     unlinkTransfer: b.mutation<{ ok: true }, string>({ query: (id) => ({ url: `/transactions/${id}/unlink`, method: 'POST' }), invalidatesTags: ['Transaction'] }),
@@ -102,7 +109,7 @@ export const api = createApi({
 
     // ---- AI ----
     aiStatus: b.query<{ enabled: boolean }, void>({ query: () => '/ai/status' }),
-    generateInsight: b.mutation<any, { scope?: string }>({ query: (body) => ({ url: '/ai/insight', method: 'POST', body }), invalidatesTags: ['Insight'] }),
+    generateInsight: b.mutation<{ jobId: string }, { scope?: string }>({ query: (body) => ({ url: '/ai/insight', method: 'POST', body }) }),
     latestInsight: b.query<any, string>({ query: (scope) => ({ url: '/ai/insight/latest', params: { scope } }) }),
     generateForecast: b.mutation<any, { scope?: string }>({ query: (body) => ({ url: '/ai/forecast', method: 'POST', body }) }),
     listAnomalies: b.query<any, { accountId?: string }>({ query: (p) => ({ url: '/ai/anomalies', params: p }) }),
@@ -131,7 +138,7 @@ export const {
   useListAccountsQuery, useCreateAccountMutation, useUpdateAccountMutation, useDeleteAccountMutation,
   useListCategoriesQuery, useCreateCategoryMutation, useUpdateCategoryMutation, useDeleteCategoryMutation,
   useListRulesQuery, useCreateRuleMutation, useUpdateRuleMutation, useDeleteRuleMutation, useTestRuleMutation, useReorderRulesMutation, useListSeedDefaultsQuery, useRestoreSeedRuleMutation,
-  useListTransactionsQuery, useCreateTransactionMutation, useUpdateTransactionMutation, useDeleteTransactionMutation, useBulkCategorizeMutation, useMarkReviewedMutation, useLinkTransferMutation, useUnlinkTransferMutation, useSuggestCategoryMutation,
+  useListTransactionsQuery, useCreateTransactionMutation, useUpdateTransactionMutation, useDeleteTransactionMutation, useBulkCategorizeMutation, useRecategorizeMutation, useDeleteAllTransactionsMutation, useMarkReviewedMutation, useLinkTransferMutation, useUnlinkTransferMutation, useSuggestCategoryMutation,
   useUploadImportMutation, useEstimateAiMutation, useCommitImportMutation, useListImportBatchesQuery, useDeleteImportBatchMutation, useListMappingsQuery, useCreateMappingMutation, useDeleteMappingMutation,
   useGetOverviewQuery, useGetDeepDiveQuery,
   useGetPortfolioQuery, useListHoldingsQuery, useCreateHoldingMutation, useDeleteHoldingMutation, useImportHoldingsMutation, useRefreshPriceMutation,

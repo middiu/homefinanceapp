@@ -1,5 +1,5 @@
 import { SQL, and, eq, gte, lte, like, or, desc, asc, sql } from 'drizzle-orm';
-import { getDb, schema } from '../db/index.js';
+import { getDb, schema, getSqlite } from '../db/index.js';
 import type { TransactionFilter, TransactionDto, PagedResult, CategorySource } from '@homefinance/shared';
 import { uid, dedupHash, nowISO } from '../utils.js';
 import { matchRule } from './rules.js';
@@ -160,4 +160,14 @@ export function markReviewed(ids: string[]) {
 /** Apply rule engine to a single transaction; returns categoryId or null. */
 export function categorizeViaRules(description: string, amount: number): string | null {
   return matchRule(description, amount);
+}
+
+/** Permanently delete every transaction and the AI categorization log.
+ *  Keeps accounts, categories, rules, and import-batch metadata. */
+export function deleteAllTransactions(): void {
+  const d = getDb();
+  getSqlite().transaction(() => {
+    d.delete(schema.aiCategorizationLog).run();
+    d.delete(schema.transactions).run();
+  })();
 }
