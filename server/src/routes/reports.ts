@@ -3,6 +3,9 @@ import { z } from 'zod';
 import { getDb, schema } from '../db/index.js';
 import { ownershipMap } from '../services/transactions.js';
 import type {
+  BudgetReport,
+  BudgetReportCategoryRow,
+  BudgetReportMonth,
   CategoryAnalytics,
   CategoryAnalyticsCategoryRow,
   CategoryAnalyticsMerchantRow,
@@ -31,7 +34,7 @@ function round2(n: number) {
 const scopeSchema = z.object({
   dateFrom: z.string().optional(),
   dateTo: z.string().optional(),
-  preset: z.enum(['thisMonth', 'lastMonth', 'thisQuarter', 'ytd', 'last12', 'custom']).optional(),
+  preset: z.enum(['thisMonth', 'lastMonth', 'thisQuarter', 'ytd', 'last12', 'last24', 'custom']).optional(),
   accountId: z.string().optional(),
   memberId: z.string().optional(),
 });
@@ -52,6 +55,8 @@ function resolvePeriod(preset?: string, dateFrom?: string, dateTo?: string) {
       return { from: `${now.getFullYear()}-01-01`, to: monthEnd(now) };
     case 'last12':
       return { from: monthStart(addMonths(now, -11)), to: monthEnd(now) };
+    case 'last24':
+      return { from: monthStart(addMonths(now, -23)), to: monthEnd(now) };
     default:
       return { from: dateFrom || monthStart(now), to: dateTo || monthEnd(now) };
   }
@@ -326,6 +331,156 @@ router.get('/category-analytics', (req, res) => {
     monthly: monthlyArr,
     byMonthCategory: byMonthCategoryArr,
     byMerchant: byMerchantRows,
+  };
+  res.json(report);
+});
+
+// ---- Budget report (past trend + overspend analysis) ----
+// Current per-category monthly budgets (category_budgets) are applied
+// retroactively across the selected period. Compares actual monthly spend
+// (scoped + transfer-excluded + ownership-weighted, mirroring category-analytics)
+// against the budget. No per-month budget history.
+const budgetSchema = scopeSchema.extend({
+  categoryId: z.union([z.string(), z.array(z.string())]).optional(),
+});
+
+router.get('/budget', (req, res) => {
+  const parsed = budgetSchema.safeParse(req.query);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const { preset, accountId, memberId } = parsed.data;
+  const period = resolvePeriod(preset, parsed.data.dateFrom, parsed.data.dateTo);
+
+  // Normalize categoryId to string[] (accepts "id", "id,id", or ["id"]).
+  let categoryIds: string[] = [];
+  const rawCat = (parsed.data as any).categoryId;
+  if (typeof rawCat === 'string') categoryIds = rawCat.split(',').map((s) => s.trim()).filter(Boolean);
+  else if (Array.isArray(rawCat)) categoryIds = rawCat.filter(Boolean);
+  const selectedCats = new Set(categoryIds);
+
+  const d = getDb();
+  const cats = d.select().from(schema.categories).all();
+  const catById = new Map(cats.map((c) => [c.id, c]));
+  const budgets = d.select().from(schema.categoryBudgets).all();
+  const budgetByCat = new Map(budgets.map((b) => [b.categoryId, b.monthlyAmount]));
+  const expenseCatIds = new Set(cats.filter((c) => c.type !== 'income' && c.type !== 'transfer').map((c) => c.id));
+
+  const transferCatIds = new Set(cats.filter((c) => c.type === 'transfer').map((c) => c.id));
+  const transferLike = (t: { isTransfer: boolean; categoryId: string | null }) =>
+    t.isTransfer || (t.categoryId != null && transferCatIds.has(t.categoryId));
+
+  // Account/member scoping (ownership-weighted) — same as category-analytics.
+  const scopePct = new Map<string, number>();
+  const scopedAccountIds: string[] | null = accountId ? [accountId] : null;
+  let txns = d.select().from(schema.transactions).all().filter((t) => !transferLike(t));
+  if (memberId) {
+    const own = ownershipMap();
+    const accts = d.select().from(schema.accounts).all();
+    for (const a of accts) {
+      const p = own.get(a.id)?.get(memberId) || 0;
+      if (p > 0) scopePct.set(a.id, p);
+    }
+    txns = txns.filter((t) => scopePct.has(t.accountId));
+  } else if (accountId) {
+    scopePct.set(accountId, 100);
+    txns = txns.filter((t) => t.accountId === accountId);
+  }
+  const shareOf = (t: { amount: number; accountId: string }) =>
+    (t.amount * (scopePct.get(t.accountId) || 100)) / 100;
+
+  // Month list for the whole period.
+  const monthsTotal: string[] = [];
+  {
+    let cur = new Date(period.from + 'T00:00:00');
+    const end = new Date(period.to + 'T00:00:00');
+    while (cur <= end) {
+      monthsTotal.push(`${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}`);
+      cur = addMonths(cur, 1);
+    }
+  }
+  const monthsCount = monthsTotal.length || 1;
+
+  // month -> categoryId -> actual expense (only budgeted cats tracked per-cat)
+  const monthCatActual = new Map<string, Map<string, number>>();
+  // month -> unbudgeted expense
+  const monthUnbudgeted = new Map<string, number>();
+  for (const m of monthsTotal) {
+    monthCatActual.set(m, new Map());
+    monthUnbudgeted.set(m, 0);
+  }
+
+  const inRange = (date: string) => date >= period.from && date <= period.to;
+  for (const t of txns) {
+    if (!inRange(t.date)) continue;
+    if (t.amount >= 0) continue; // expenses only
+    const m = t.date.slice(0, 7);
+    if (!monthCatActual.has(m)) continue; // outside month list (shouldn't happen)
+    const sh = -shareOf(t); // positive expense amount
+    if (t.categoryId && budgetByCat.has(t.categoryId)) {
+      const mm = monthCatActual.get(m)!;
+      mm.set(t.categoryId, (mm.get(t.categoryId) || 0) + sh);
+    } else if (!t.categoryId || expenseCatIds.has(t.categoryId)) {
+      // non-budgeted expense category (or uncategorized) → unbudgeted
+      monthUnbudgeted.set(m, (monthUnbudgeted.get(m) || 0) + sh);
+    }
+  }
+
+  // Which budgeted categories are in scope (category filter applies).
+  const inScopeBudgetCats = [...budgetByCat.entries()].filter(([cid]) =>
+    selectedCats.size === 0 ? true : selectedCats.has(cid),
+  );
+  const inScopeMonthlyBudgetTotal = inScopeBudgetCats.reduce((s, [, v]) => s + v, 0);
+
+  // Per-month aggregate row.
+  const monthly: BudgetReportMonth[] = monthsTotal.map((m) => {
+    const budget = round2(inScopeMonthlyBudgetTotal);
+    let actual = 0;
+    for (const [cid] of inScopeBudgetCats) actual += monthCatActual.get(m)!.get(cid) || 0;
+    actual = round2(actual);
+    const unbudgeted = round2(monthUnbudgeted.get(m) || 0);
+    const variance = round2(actual - budget);
+    const adherencePct = budget > 0 ? Math.round((actual / budget) * 1000) / 10 : null;
+    return { month: m, budget, actual, unbudgeted, variance, adherencePct };
+  });
+
+  // Per-category rows.
+  const byCategory: BudgetReportCategoryRow[] = inScopeBudgetCats.map(([cid, monthlyBudget]) => {
+    const name = catById.get(cid)?.name || 'Unknown';
+    const catMonthly = monthsTotal.map((m) => ({
+      month: m,
+      budget: round2(monthlyBudget),
+      actual: round2(monthCatActual.get(m)!.get(cid) || 0),
+    }));
+    const actual = round2(catMonthly.reduce((s, x) => s + x.actual, 0));
+    const budget = round2(monthlyBudget * monthsCount);
+    const variance = round2(actual - budget);
+    const variancePct = budget > 0 ? Math.round((variance / budget) * 1000) / 10 : null;
+    const monthsOver = catMonthly.filter((x) => x.actual > x.budget).length;
+    const monthsWithSpend = catMonthly.filter((x) => x.actual > 0).length;
+    return { categoryId: cid, name, monthlyBudget: round2(monthlyBudget), budget, actual, variance, variancePct, monthsOver, monthsWithSpend, monthly: catMonthly };
+  });
+  byCategory.sort((a, b) => b.variance - a.variance || b.actual - a.actual);
+
+  const totalBudget = round2(inScopeMonthlyBudgetTotal * monthsCount);
+  const totalActual = round2(monthly.reduce((s, m) => s + m.actual, 0));
+  const totalUnbudgeted = round2(monthly.reduce((s, m) => s + m.unbudgeted, 0));
+  const totalVariance = round2(totalActual - totalBudget);
+  const totalsVariancePct = totalBudget > 0 ? Math.round((totalVariance / totalBudget) * 1000) / 10 : null;
+  const monthsOver = monthly.filter((m) => m.actual > m.budget).length;
+
+  const report: BudgetReport = {
+    period: { from: period.from, to: period.to },
+    scope: { accountIds: scopedAccountIds, memberId: memberId ?? null, categoryIds: selectedCats.size ? categoryIds : null },
+    totals: {
+      budget: totalBudget,
+      actual: totalActual,
+      variance: totalVariance,
+      variancePct: totalsVariancePct,
+      unbudgeted: totalUnbudgeted,
+      monthsOver,
+      monthsTotal: monthsCount,
+    },
+    monthly,
+    byCategory,
   };
   res.json(report);
 });

@@ -12,6 +12,7 @@ import {
   testConnection,
   testHistory,
   buildForecastReport,
+  generateBudgets,
 } from '../services/ai.js';
 import { getDb, schema } from '../db/index.js';
 import { uid } from '../utils.js';
@@ -51,6 +52,18 @@ router.post('/forecast-report', (req, res) => {
   if (Array.isArray(req.body.memberId)) filter.memberId = req.body.memberId;
   const job = createJob('forecast-report', 4);
   buildForecastReport(filter, job.id)
+    .then((r) => finishJob(job.id, r))
+    .catch((e) => failJob(job.id, (e as Error).message));
+  res.status(202).json({ jobId: job.id });
+});
+
+// AI Budget Assistant — generate budgets for unset categories + suggest changes
+// for set ones, using 24 months of spend history + AU cost-of-living web search.
+// Runs as a job (4 stages); SSE at /jobs/:id/events. Auto-applies suggestions to
+// category_budgets on completion.
+router.post('/budgets/suggest', (_req, res) => {
+  const job = createJob('budgets', 4);
+  generateBudgets(job.id)
     .then((r) => finishJob(job.id, r))
     .catch((e) => failJob(job.id, (e as Error).message));
   res.status(202).json({ jobId: job.id });

@@ -2,9 +2,9 @@
 
 A self-hosted, private web application for tracking household finances. Import bank transaction exports (CSV/OFX/QIF), categorize them (manual, rules, or AI), visualize spending across household members with ownership-weighted splits, and generate AI-assisted insights, forecasts, and subscription/anomaly detection.
 
-**Single-household, no in-app login.** Designed to run on your own machine (Docker Compose) or a VPS behind a VPN/reverse proxy. All financial data stays in a local SQLite file; only aggregated category/amount data is sent to an AI provider, and only when AI features are enabled.
+**Single-household, single-user login.** Designed to run on your own machine (Docker Compose) or a VPS. All financial data stays in a local SQLite file; only aggregated category/amount data is sent to an AI provider, and only when AI features are enabled.
 
-> ⚠️ **Security note:** This app has **no authentication**. Do not expose it directly to the public internet. If you deploy beyond localhost, put it behind a VPN or a reverse proxy with auth (see `docs/deployment.md`).
+> 🔐 **Authentication:** Single-user login — one `admin` account (argon2id-hashed password, forced reset on first login), HttpOnly session cookies, and brute-force protection (IP rate-limit + account lockout). For public exposure, still terminate TLS at a reverse proxy and prefer a network perimeter (VPN) as defense in depth (see `docs/deployment.md`).
 
 ## Tech stack
 
@@ -40,6 +40,8 @@ podman compose up --build
 
 The app is then available at <http://localhost:4000>. The SQLite database and backups live in **named volumes** (`homefinance-db`, `homefinance-backups`) that survive image rebuilds and `podman compose down` — your data is not lost when you build a new image. Docker works identically if you prefer it (`docker compose up --build`).
 
+On first load you'll be prompted to sign in. The default credentials are **`admin` / `Pa$$word!`**, and you are **forced to choose a new password** (min 12 characters) before reaching the app. Set `ADMIN_INITIAL_PASSWORD` in `.env` before first boot if you want a different starting password.
+
 ## Local dev without Docker
 
 ```bash
@@ -73,6 +75,18 @@ See [`.env.example`](./.env.example) for the full list with defaults:
 - `AI_ENABLED` / `AI_BASE_URL` / `AI_API_KEY` / `AI_MODEL` — Ollama Cloud config; leave disabled for no external calls
 - `AI_DIGEST_CRON` — weekly insight schedule (default `0 7 * * 1`, Monday 07:00)
 - `BACKUP_DIR` / `BACKUP_CRON` / `BACKUP_KEEP` — daily DB backup config
+- `ADMIN_INITIAL_PASSWORD` — initial admin password (seeded once on first boot; default `Pa$$word!`; change on first login — forced)
+- `SESSION_TTL_MS` / `AUTH_MAX_FAILS` / `AUTH_LOCKOUT_MS` / `COOKIE_SECURE` / `CORS_ORIGIN` — auth tuning (see `.env.example`)
+
+## Authentication
+
+HomeFinance uses **single-user authentication** — one `admin` account, no multi-user or profiles.
+
+- **First login**: sign in with `admin` / `ADMIN_INITIAL_PASSWORD` (default `Pa$$word!`); you are forced to set a new password (min 12 chars) immediately. After that, the env var has no effect — change the password from the in-app *Change password* page (sidebar footer → Sign out is also there).
+- **Passwords** are hashed with **argon2id** (memory-hard, GPU-resistant) — never stored or sent in cleartext.
+- **Sessions** are opaque tokens in **HttpOnly + SameSite=Lax + Secure** cookies; only a SHA-256 hash of the token is stored in the DB, so a database leak doesn't expose live sessions. Sessions are revocable and persist across restarts. Changing your password invalidates all other sessions.
+- **Brute-force protection**: the login endpoint is rate-limited per IP (10 attempts / 15 min) and the account **locks** after `AUTH_MAX_FAILS` failed attempts (progressive delay, capped 30 min).
+- For public exposure, terminate **TLS** at a reverse proxy (so the `Secure` cookie is encrypted in transit) and prefer a network perimeter (VPN). See [`docs/deployment.md`](./docs/deployment.md).
 
 ## Documentation
 

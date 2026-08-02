@@ -5,6 +5,7 @@ import { eq } from 'drizzle-orm';
 import type { InsightType } from '@homefinance/shared';
 import { OLLAMA_CLOUD_MODELS } from '@homefinance/shared';
 import { matchRule, deriveMatchPattern, createOrUpdateAiRule, getActiveRules } from './rules.js';
+import { ownershipMap } from './transactions.js';
 import { Ollama } from 'ollama';
 import { updateJob } from './jobs.js';
 
@@ -637,14 +638,48 @@ export async function buildForecastReport(filter?: { accountId?: string[]; membe
   const netSeries = history.map((h) => h.net);
 
   const forecast: { month: string; income: number; expense: number; net: number; cumulative: number; actual: false }[] = [];
-  let cumulative = history[history.length - 1]?.net ?? 0;
+
+  // Seed the cumulative balance projection from the ACTUAL current balance
+  // (sum of opening balances + all transaction amounts for the scoped accounts,
+  // including transfers — money still moves between accounts). The previous
+  // seed (last month's net flow) started near 0 and produced a meaningless
+  // "end balance" of a few thousand instead of projecting from real net worth.
+  const accounts = d.select().from(schema.accounts).all();
+  const scopedAccts = filter?.accountId?.length
+    ? accounts.filter((a) => filter.accountId!.includes(a.id))
+    : accounts;
+  // memberId filter → ownership-weighted share of each scoped account's balance.
+  const memberPct = new Map<string, number>();
+  if (filter?.memberId?.length) {
+    const own = ownershipMap();
+    for (const a of scopedAccts) {
+      const members = own.get(a.id);
+      if (!members) continue;
+      let p = 0;
+      for (const m of filter.memberId) p += members.get(m) || 0;
+      memberPct.set(a.id, Math.min(100, p));
+    }
+  }
+  const balByAccount = new Map<string, number>();
+  for (const a of scopedAccts) balByAccount.set(a.id, a.openingBalance);
+  for (const t of d.select().from(schema.transactions).all()) {
+    if (!balByAccount.has(t.accountId)) continue;
+    balByAccount.set(t.accountId, (balByAccount.get(t.accountId) || 0) + t.amount);
+  }
+  let currentBalance = 0;
+  for (const a of scopedAccts) {
+    const p = memberPct.has(a.id) ? memberPct.get(a.id)! : filter?.memberId?.length ? 0 : 100;
+    currentBalance += (balByAccount.get(a.id) || 0) * p / 100;
+  }
+  let cumulative = round2(currentBalance);
+
   for (let i = 1; i <= 12; i++) {
     const d2 = addMonth(now, i);
     const monthKey = isoYM(d2);
     const income = project(incomeSeries, i);
-    let expense = project(expenseSeries, i);
-    // Add recurring fixed amounts to expense.
-    for (const r of recurring) expense += r.monthly;
+    // Recurring charges are already counted in the historical expense series (and
+    // thus in the projection) — adding them again here would double-count.
+    const expense = project(expenseSeries, i);
     const net = round2(income - expense);
     cumulative = round2(cumulative + net);
     forecast.push({ month: monthKey, income: round2(income), expense: round2(expense), net, cumulative, actual: false as const });
@@ -687,4 +722,190 @@ function project(series: number[], ahead: number): number {
   // seasonality: same month one year ago (12 months back from the forecast month = series index ahead-1)
   const seasonal = series[series.length - 12 + ((ahead - 1) % 12)] ?? avg;
   return Math.max(0, Math.round((0.5 * (avg + trend * ahead) + 0.5 * seasonal) * 100) / 100);
+}
+
+// ---- AI Budget Assistant (generate / suggest monthly budgets) ----
+// Household-level (all accounts at 100%). Sends only per-category spend aggregates
+// + current budgets + generic AU cost-of-living web-search context to the model —
+// never raw transactions, account numbers, or balances (privacy §4.5).
+function bMonthStart(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
+}
+function bMonthEnd(d: Date): string {
+  const e = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+  return `${e.getFullYear()}-${String(e.getMonth() + 1).padStart(2, '0')}-${String(e.getDate()).padStart(2, '0')}`;
+}
+function bAddMonths(d: Date, n: number): Date {
+  return new Date(d.getFullYear(), d.getMonth() + n, 1);
+}
+
+interface BudgetSuggestion {
+  categoryId: string;
+  categoryName: string;
+  suggestedMonthlyAmount: number;
+  reason: string;
+}
+
+/** Per-category spend stats over the trailing 24 months for expense categories.
+ *  Includes only categories with spend history or an existing budget (skips
+ *  never-used categories to avoid hallucinated budgets). */
+function budgetCategoryStats() {
+  const d = getDb();
+  const txns = d.select().from(schema.transactions).all();
+  const cats = d.select().from(schema.categories).all();
+  const budgets = d.select().from(schema.categoryBudgets).all();
+  const budgetByCat = new Map(budgets.map((b) => [b.categoryId, b.monthlyAmount]));
+
+  const transferCatIds = new Set(cats.filter((c) => c.type === 'transfer').map((c) => c.id));
+  const isTransferLike = (t: { isTransfer: boolean; categoryId: string | null }) =>
+    t.isTransfer || (t.categoryId != null && transferCatIds.has(t.categoryId));
+
+  const now = new Date();
+  const start = bMonthStart(bAddMonths(now, -23));
+  const end = bMonthEnd(now);
+  const inRange = (date: string) => date >= start && date <= end;
+
+  // month index 0..23 keyed YYYY-MM
+  const monthKeys: string[] = [];
+  for (let i = 23; i >= 0; i--) {
+    const ms = bAddMonths(now, -i);
+    monthKeys.push(`${ms.getFullYear()}-${String(ms.getMonth() + 1).padStart(2, '0')}`);
+  }
+  const monthIdx = new Map(monthKeys.map((k, i) => [k, i]));
+
+  // catName -> per-month expense array (length 24)
+  const byCat = new Map<string, number[]>();
+  for (const c of cats) byCat.set(c.name, new Array(24).fill(0));
+
+  for (const t of txns) {
+    if (!inRange(t.date)) continue;
+    if (t.amount >= 0) continue; // expenses only
+    if (isTransferLike(t)) continue;
+    const cat = cats.find((c) => c.id === t.categoryId);
+    const name = cat ? cat.name : 'Uncategorized';
+    if (!byCat.has(name)) byCat.set(name, new Array(24).fill(0));
+    const month = t.date.slice(0, 7);
+    const idx = monthIdx.get(month);
+    if (idx == null) continue;
+    byCat.get(name)![idx] += -t.amount;
+  }
+
+  const stats: {
+    categoryName: string;
+    categoryId: string;
+    avgMonthly: number;
+    recent3Avg: number;
+    priorAvg: number;
+    trendPct: number | null;
+    monthsWithSpend: number;
+    currentBudget: number | null;
+  }[] = [];
+  for (const c of cats) {
+    if (c.type === 'income' || c.type === 'transfer') continue;
+    const arr = byCat.get(c.name) || new Array(24).fill(0);
+    const monthsWithSpend = arr.filter((v) => v > 0).length;
+    const currentBudget = budgetByCat.has(c.id) ? budgetByCat.get(c.id)! : null;
+    if (monthsWithSpend === 0 && currentBudget == null) continue; // skip never-used + unset
+    const sum = arr.reduce((s, v) => s + v, 0);
+    const avgMonthly = round2(sum / 24);
+    const recent3 = arr.slice(-3);
+    const recent3Sum = recent3.reduce((s, v) => s + v, 0);
+    const recent3Avg = round2(recent3Sum / 3);
+    const prior = arr.slice(0, 21);
+    const priorSum = prior.reduce((s, v) => s + v, 0);
+    const priorAvg = round2(priorSum / 21);
+    const trendPct = priorAvg > 0 ? Math.round(((recent3Avg - priorAvg) / priorAvg) * 1000) / 10 : null;
+    stats.push({ categoryName: c.name, categoryId: c.id, avgMonthly, recent3Avg, priorAvg, trendPct, monthsWithSpend, currentBudget });
+  }
+  return { stats, budgetByCat, cats };
+}
+
+/** Parse a JSON array of budget suggestions from model output, tolerating
+ *  code fences / surrounding prose. Returns [] on failure. */
+function parseBudgetSuggestions(raw: string): { categoryName: string; suggestedMonthlyAmount: number; reason: string }[] {
+  let s = (raw || '').trim();
+  // strip code fences
+  s = s.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+  const start = s.indexOf('[');
+  const end = s.lastIndexOf(']');
+  if (start < 0 || end < 0 || end <= start) return [];
+  try {
+    const arr = JSON.parse(s.slice(start, end + 1));
+    if (!Array.isArray(arr)) return [];
+    return arr
+      .filter((x) => x && typeof x.categoryName === 'string' && typeof x.suggestedMonthlyAmount === 'number')
+      .map((x) => ({ categoryName: String(x.categoryName), suggestedMonthlyAmount: Math.max(0, Number(x.suggestedMonthlyAmount) || 0), reason: typeof x.reason === 'string' ? x.reason : '' }));
+  } catch {
+    return [];
+  }
+}
+
+export async function generateBudgets(jobId?: string): Promise<{
+  applied: { categoryId: string; categoryName: string; monthlyAmount: number }[];
+  changes: { categoryId: string; categoryName: string; previous: number | null; new: number; reason: string }[];
+  narrative: string;
+}> {
+  if (!isAiEnabled()) {
+    return { applied: [], changes: [], narrative: 'AI is disabled or not configured. Set an API key in AI & Insights settings.' };
+  }
+  jobStage(jobId, 'Aggregating 24 months of spending', 1, 4);
+  const { stats, budgetByCat, cats } = budgetCategoryStats();
+
+  jobStage(jobId, 'Researching AU cost of living', 2, 4);
+  const marketContext = (
+    await Promise.all([
+      aiWebSearch('Australia cost of living 2026 household expenses'),
+      aiWebSearch('Australia CPI inflation rate 2026 ABS quarterly'),
+      aiWebSearch('RBA interest rates household budget 2026'),
+    ])
+  ).filter(Boolean).join('\n---\n');
+
+  jobStage(jobId, 'Generating budget suggestions with AI', 3, 4);
+  const system =
+    'You are an expert personal finance advisor for Australian households. You have deep knowledge of the Australian cost of living, the ABS Consumer Price Index, Reserve Bank of Australia interest rates, and typical household budgeting benchmarks. All amounts are in AUD. You reason about essential vs discretionary spending and adjust budgets for current Australian economic conditions (inflation, cost-of-living pressure).';
+  const prompt = `You are planning monthly budgets for an Australian household. Below is per-category spend data over the trailing 24 months (AUD), each category's current monthly budget (null = none set yet), and recent AU cost-of-living market research.
+
+For EACH category, propose a sensible monthly budget in AUD. For categories with no budget yet, generate one based on their spend history and current AU conditions. For categories with an existing budget, suggest a revised amount based on recent spend trends and the market research (increase if costs are rising, decrease if spending has fallen, or keep stable).
+
+Respond with STRICT JSON ONLY — an array of objects, no prose, no code fences:
+[{ "categoryName": "<name>", "suggestedMonthlyAmount": <number>, "reason": "<one short sentence why, referencing trend or AU conditions>" }]
+
+Categories data:
+${JSON.stringify(stats)}
+
+Current AU market research context:
+${marketContext || '(no web search results available — rely on the spend history and your knowledge of current AU conditions)'}`;
+
+  const raw = await getProvider().chat(prompt, system);
+  const parsed = parseBudgetSuggestions(raw);
+
+  jobStage(jobId, 'Applying budgets', 4, 4);
+  const d = getDb();
+  const nameById = new Map(cats.map((c) => [c.name, c.id]));
+  const applied: { categoryId: string; categoryName: string; monthlyAmount: number }[] = [];
+  const changes: { categoryId: string; categoryName: string; previous: number | null; new: number; reason: string }[] = [];
+
+  for (const s of parsed) {
+    const categoryId = nameById.get(s.categoryName);
+    if (!categoryId) {
+      console.warn('[ai] budget suggestion: no category named', s.categoryName);
+      continue;
+    }
+    const monthlyAmount = Math.round(s.suggestedMonthlyAmount * 100) / 100;
+    const previous = budgetByCat.has(categoryId) ? budgetByCat.get(categoryId)! : null;
+    const existing = d.select().from(schema.categoryBudgets).where(eq(schema.categoryBudgets.categoryId, categoryId)).get();
+    if (existing) {
+      d.update(schema.categoryBudgets).set({ monthlyAmount }).where(eq(schema.categoryBudgets.id, existing.id)).run();
+    } else {
+      d.insert(schema.categoryBudgets).values({ id: uid(), categoryId, monthlyAmount }).run();
+    }
+    budgetByCat.set(categoryId, monthlyAmount);
+    applied.push({ categoryId, categoryName: s.categoryName, monthlyAmount });
+    changes.push({ categoryId, categoryName: s.categoryName, previous, new: monthlyAmount, reason: s.reason });
+  }
+
+  const narrative = parsed.length === 0
+    ? 'AI returned no budget suggestions. Try again or set budgets manually.'
+    : `Applied ${applied.length} budget suggestion${applied.length === 1 ? '' : 's'} based on 24 months of history and current AU cost-of-living research.`;
+  return { applied, changes, narrative };
 }

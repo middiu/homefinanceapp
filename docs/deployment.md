@@ -54,6 +54,12 @@ Stop: `podman compose down`. Rebuild after code changes: `podman compose up --bu
 | `BACKUP_DIR` | `./backups` | backup directory — container overrides to `/backups` (named volume `homefinance-backups`) |
 | `BACKUP_CRON` | `0 3 * * *` | daily backup schedule |
 | `BACKUP_KEEP` | 14 | backups to retain (rotation) |
+| `ADMIN_INITIAL_PASSWORD` | `Pa$$word!` | initial admin password, seeded once on first boot (change on first login — forced) |
+| `SESSION_TTL_MS` | `604800000` (7d) | session cookie lifetime |
+| `AUTH_MAX_FAILS` | 5 | failed login attempts before account lockout |
+| `AUTH_LOCKOUT_MS` | `300000` (5min) | base lockout duration (grows with repeats, capped 30min) |
+| `COOKIE_SECURE` | true | session cookie `Secure` flag (set false only for plain-HTTP local testing) |
+| `CORS_ORIGIN` | — | comma-separated allowed cross-origin hosts (leave empty to deny cross-origin) |
 
 ## Backup & restore
 
@@ -82,36 +88,42 @@ See the main README. `npm run dev` runs the server (`:4000`) and Vite client (`:
 
 ## M5 — VPS / public deployment (follow-up)
 
-> ⚠️ The app has **no login**. Never expose it directly to the public internet.
+### In-app authentication (built-in)
 
-### Minimum hardening before any non-localhost exposure
+The app ships with **single-user authentication** — no VPN/reverse-proxy auth is required for it to be safe, but TLS + a network perimeter are still recommended as defense in depth (see below).
 
-1. **Network perimeter** — restrict access via a VPN (e.g. WireGuard/Tailscale) so only your devices reach it.
-2. **Reverse proxy with auth** — put the app behind Caddy or Traefik with:
-   - HTTPS via Let's Encrypt (automatic certs).
-   - HTTP Basic Auth or a forward-auth provider (e.g. Authelia, Cloudflare Access) in front.
+- One user, `admin`, seeded on first boot with `ADMIN_INITIAL_PASSWORD` (default `Pa$$word!`). The first sign-in **forces a password reset** — you must choose a new password (min 12 chars) before reaching the app. After that, `ADMIN_INITIAL_PASSWORD` has no effect; change the password via the in-app *Change password* flow.
+- Passwords are hashed with **argon2id** (memory-hard, GPU-resistant, OWASP params).
+- Brute-force protection: per-IP rate limiting on `/api/auth/login` (10/15min) **plus** account lockout after `AUTH_MAX_FAILS` failed attempts (progressive, capped 30min).
+- Sessions are **opaque HttpOnly SameSite=Lax cookies**, with the token stored only as a SHA-256 hash in the DB (a DB leak doesn't expose live sessions; sessions are revocable and persist across restarts). Changing the password invalidates all other sessions.
+- Security headers via `helmet` + a bounded CSP.
+
+For public exposure, still **terminate TLS** (so cookies aren't sent in the clear) and prefer a network perimeter (VPN) so only your devices reach the app.
+
+### Minimum hardening for non-localhost exposure
+
+1. **TLS** — terminate HTTPS via a reverse proxy (Caddy/Traefik) so the `Secure` session cookie is encrypted in transit. Set `COOKIE_SECURE=true` (default in production).
+2. **Network perimeter (recommended)** — restrict access via a VPN (e.g. WireGuard/Tailscale) so only your devices reach it. In-app auth is the primary layer; this is defense in depth.
 3. **Firewall** — only expose the reverse proxy port (443); keep `PORT` (4000) on localhost.
 
-### Example: Caddy with Basic Auth + automatic HTTPS
+### Example: Caddy with automatic HTTPS
 
 `Caddyfile`:
 ```
 finance.example.com {
-    basicauth {
-        <user> <bcrypt-hash>
-    }
     reverse_proxy localhost:4000
 }
 ```
 
-Run HomeFinance on the VPS bound to localhost (`PORT=4000`, do not publish the port publicly), and let Caddy terminate TLS and enforce auth. `caddy run` will provision a Let's Encrypt certificate automatically.
+Run HomeFinance on the VPS bound to localhost (`PORT=4000`, do not publish the port publicly), and let Caddy terminate TLS. `caddy run` will provision a Let's Encrypt certificate automatically. (Caddy/Traefik basic-auth or forward-auth is now optional — in-app auth handles sign-in — but you may layer it for additional protection.)
 
 ### Example: Traefik
 
-With a Traefik labels-based setup, define an entrypoint on `:443`, a Let's Encrypt ACME resolver, and a `middlewares` chain for basic-auth or forward-auth, then route `finance.example.com` to the HomeFinance container on the internal network (do not publish `4000`).
+With a Traefik labels-based setup, define an entrypoint on `:443` and a Let's Encrypt ACME resolver, then route `finance.example.com` to the HomeFinance container on the internal network (do not publish `4000`).
 
 ### Reinforced security guidance
 
+- Set `ADMIN_INITIAL_PASSWORD` to something non-default before first boot, and always change it on first login.
 - Keep `AI_API_KEY` and the SQLite data volume private; the API key never leaves the server.
 - Disable AI (`AI_ENABLED=false`) if you do not want any data (aggregates only) leaving your server.
 - Rotate backups off-host (e.g. copy the `homefinance-backups` volume contents to object storage) for disaster recovery.

@@ -24,6 +24,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV DATABASE_URL=/data/homefinance.sqlite
 ENV BACKUP_DIR=/backups
+ENV COOKIE_SECURE=true
 
 # Copy the built tree wholesale. npm workspaces hoists deps into the root
 # node_modules and symlinks the @homefinance/shared workspace package; copying

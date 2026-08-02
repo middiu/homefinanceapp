@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { setupDb, getDb, schema, randomUUID } from './dbHelper.js';
-import { normalizeHost, recategorizeTransactions, sanitizeForAi } from '../services/ai.js';
+import { normalizeHost, recategorizeTransactions, sanitizeForAi, buildForecastReport } from '../services/ai.js';
 import { deleteAllTransactions } from '../services/transactions.js';
 import { uid } from '../utils.js';
 import { eq } from 'drizzle-orm';
@@ -123,4 +123,27 @@ describe('deleteAllTransactions', () => {
     expect(db.select().from(schema.transactions).all().length).toBe(0);
     expect(db.select().from(schema.aiCategorizationLog).all().length).toBe(0);
   });
+});
+
+describe('buildForecastReport', () => {
+  it('seeds the cumulative projection from the current balance, not a single month net', async () => {
+    const db = getDb();
+    const acct = uid();
+    db.insert(schema.accounts).values({ id: acct, name: 'Forecast Acct', type: 'transaction', currency: 'AUD', openingBalance: 100000 }).run();
+    const now = new Date();
+    const mk = (monthsBack: number, amount: number) => {
+      const d = new Date(now.getFullYear(), now.getMonth() - monthsBack, 15);
+      const k = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-15`;
+      db.insert(schema.transactions).values({ id: uid(), accountId: acct, date: k, description: 'x', rawDescription: 'x', amount, categoryId: null, source: 'manual', isTransfer: false, needsReview: false, dedupHash: randomUUID() }).run();
+    };
+    // 6 months of +5000 income / -3000 expense => ~+2000 net/month, ~100000+ balance.
+    for (let i = 0; i < 6; i++) { mk(i, 5000); mk(i, -3000); }
+
+    const report = await buildForecastReport(undefined, undefined);
+    expect(report.forecast.length).toBe(12);
+    // The projection must start from the ~100k balance, not a single month's ~2k
+    // net flow (the old bug seeded cumulative from last month's net).
+    expect(report.forecast[0].cumulative).toBeGreaterThan(50000);
+    expect(report.forecast[11].cumulative).toBeGreaterThan(50000);
+  }, 30000);
 });

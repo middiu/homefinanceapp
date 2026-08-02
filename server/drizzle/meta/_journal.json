@@ -8,6 +8,13 @@
       "when": 1785562345461,
       "tag": "0000_hot_avengers",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1785629490473,
+      "tag": "0001_slimy_outlaw_kid",
+      "breakpoints": true
     }
   ]
 }

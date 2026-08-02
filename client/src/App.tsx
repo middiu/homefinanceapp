@@ -1,7 +1,9 @@
-import { NavLink, Route, Routes } from 'react-router-dom';
-import { LayoutDashboard, UserSquare2, ListChecks, Upload, Tags, Wallet, Sparkles, DatabaseBackup, TrendingUp, BarChart3, PieChart, Sun, Moon, PiggyBank, Lightbulb } from 'lucide-react';
+import { NavLink, Outlet, Route, Routes, useNavigate } from 'react-router-dom';
+import { LayoutDashboard, UserSquare2, ListChecks, Upload, Tags, Wallet, Sparkles, DatabaseBackup, TrendingUp, BarChart3, PieChart, Sun, Moon, PiggyBank, Lightbulb, Target, LogOut } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useTheme } from './app/theme';
+import { RequireAuth } from './app/auth';
+import { useLogoutMutation } from './app/api';
 import OverviewPage from '@/pages/OverviewPage';
 import DeepDivePage from '@/pages/DeepDivePage';
 import TransactionsPage from '@/pages/TransactionsPage';
@@ -16,6 +18,9 @@ import ReportCategoryAnalyticsPage from '@/pages/ReportCategoryAnalyticsPage';
 import ReportForecastPage from '@/pages/ReportForecastPage';
 import InsightsPage from '@/pages/InsightsPage';
 import BudgetsPage from '@/pages/BudgetsPage';
+import BudgetReportPage from '@/pages/BudgetReportPage';
+import LoginPage from '@/pages/LoginPage';
+import ChangePasswordPage from '@/pages/ChangePasswordPage';
 
 const nav = [
   // Dashboards / reports
@@ -23,6 +28,7 @@ const nav = [
   { to: '/deepdive', label: 'Person/Account', icon: UserSquare2 },
   { to: '/reports/income-expense', label: 'Income vs Expense', icon: BarChart3 },
   { to: '/reports/categories', label: 'Category analytics', icon: PieChart },
+  { to: '/reports/budget', label: 'Budget report', icon: Target },
   { to: '/reports/forecast', label: 'Forecast', icon: Sparkles },
   { to: '/insights', label: 'Insights', icon: Lightbulb },
   { to: '/investments', label: 'Investments', icon: TrendingUp },
@@ -53,7 +59,23 @@ function ThemeToggle() {
   );
 }
 
-export default function App() {
+function LogoutButton() {
+  const navigate = useNavigate();
+  const [logout] = useLogoutMutation();
+  return (
+    <button
+      type="button"
+      onClick={async () => { await logout(); navigate('/login', { replace: true }); }}
+      className="flex items-center gap-2 rounded-md px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+      title="Sign out"
+    >
+      <LogOut className="h-3.5 w-3.5" /> Sign out
+    </button>
+  );
+}
+
+/** Authenticated shell: sidebar + main with an <Outlet/> for the nested routes. */
+function AppLayout() {
   return (
     <div className="flex h-full">
       <aside className="hidden w-60 shrink-0 border-r border-border bg-card md:flex md:flex-col">
@@ -103,24 +125,40 @@ export default function App() {
           <ThemeToggle />
         </div>
         <div className="mx-auto max-w-7xl p-4 md:p-6">
-          <Routes>
-            <Route path="/" element={<OverviewPage />} />
-            <Route path="/deepdive" element={<DeepDivePage />} />
-            <Route path="/transactions" element={<TransactionsPage />} />
-            <Route path="/import" element={<ImportPage />} />
-            <Route path="/investments" element={<InvestmentsPage />} />
-            <Route path="/reports/income-expense" element={<ReportIncomeExpensePage />} />
-            <Route path="/reports/categories" element={<ReportCategoryAnalyticsPage />} />
-            <Route path="/reports/forecast" element={<ReportForecastPage />} />
-            <Route path="/insights" element={<InsightsPage />} />
-            <Route path="/budgets" element={<BudgetsPage />} />
-            <Route path="/categories" element={<CategoriesRulesPage />} />
-            <Route path="/accounts" element={<AccountsMembersPage />} />
-            <Route path="/ai" element={<AiSettingsPage />} />
-            <Route path="/backups" element={<BackupsPage />} />
-          </Routes>
+          <Outlet />
+        </div>
+        <div className="hidden border-t border-border px-4 py-2 md:flex md:justify-end">
+          <LogoutButton />
         </div>
       </main>
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <Routes>
+      <Route path="/login" element={<LoginPage />} />
+      <Route element={<RequireAuth />}>
+        <Route path="/change-password" element={<ChangePasswordPage />} />
+        <Route element={<AppLayout />}>
+          <Route path="/" element={<OverviewPage />} />
+          <Route path="/deepdive" element={<DeepDivePage />} />
+          <Route path="/transactions" element={<TransactionsPage />} />
+          <Route path="/import" element={<ImportPage />} />
+          <Route path="/investments" element={<InvestmentsPage />} />
+          <Route path="/reports/income-expense" element={<ReportIncomeExpensePage />} />
+          <Route path="/reports/categories" element={<ReportCategoryAnalyticsPage />} />
+          <Route path="/reports/budget" element={<BudgetReportPage />} />
+          <Route path="/reports/forecast" element={<ReportForecastPage />} />
+          <Route path="/insights" element={<InsightsPage />} />
+          <Route path="/budgets" element={<BudgetsPage />} />
+          <Route path="/categories" element={<CategoriesRulesPage />} />
+          <Route path="/accounts" element={<AccountsMembersPage />} />
+          <Route path="/ai" element={<AiSettingsPage />} />
+          <Route path="/backups" element={<BackupsPage />} />
+        </Route>
+      </Route>
+    </Routes>
   );
 }

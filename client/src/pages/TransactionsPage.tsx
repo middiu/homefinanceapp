@@ -208,15 +208,15 @@ export default function TransactionsPage() {
         </div>
       )}
 
-      <Table>
+      <Table className="table-fixed !text-xs">
         <THead>
           <TR>
             <TH className="w-8"><input type="checkbox" checked={rows.length > 0 && selected.size === rows.length} onChange={toggleAll} /></TH>
-            <TH className="w-24">Date</TH>
-            <TH className="w-36">Account</TH>
-            <TH>Description</TH>
-            <TH className="w-56 min-w-[14rem]">Category</TH>
-            <TH className="w-20">Src</TH>
+            <TH className="w-20">Date</TH>
+            <TH className="w-28 truncate">Account</TH>
+            <TH className="w-72">Description</TH>
+            <TH className="w-44">Category</TH>
+            <TH className="w-16">Src</TH>
             <TH className="w-24 text-right">Amount</TH>
             <TH className="w-10"></TH>
           </TR>
@@ -229,11 +229,13 @@ export default function TransactionsPage() {
           ) : rows.map((t: any) => (
             <TR key={t.id}>
               <TD><input type="checkbox" checked={selected.has(t.id)} onChange={() => toggle(t.id)} /></TD>
-              <TD className="whitespace-nowrap text-muted-foreground">{formatDate(t.date)}{t.time ? <span className="ml-1 text-xs">{t.time.slice(0, 5)}</span> : null}</TD>
-              <TD className="truncate text-muted-foreground">{accounts?.find((a) => a.id === t.accountId)?.name}</TD>
-              <TD className="truncate" title={t.rawDescription ? `${t.rawDescription}\n— normalized: ${t.description}` : t.description}>
-                {t.description}
-                <div className="flex gap-1">
+              <TD className="whitespace-nowrap align-top text-muted-foreground">{formatDate(t.date)}{t.time ? <span className="ml-1 opacity-70">{t.time.slice(0, 5)}</span> : null}</TD>
+              <TD className="truncate align-top text-muted-foreground">{accounts?.find((a) => a.id === t.accountId)?.name}</TD>
+              <TD className="align-top">
+                <div className="break-words leading-snug" title={t.rawDescription ? `${t.rawDescription}\n— normalized: ${t.description}` : t.description}>
+                  {t.description}
+                </div>
+                <div className="mt-1 flex gap-1">
                   {t.needsReview && <Badge tone="warning">review</Badge>}
                   {(t.isTransfer || catTypeById.get(t.categoryId) === 'transfer') && <Badge tone="default">transfer</Badge>}
                 </div>

@@ -22,13 +22,39 @@ import type {
   SubscriptionDto,
   TransactionDto,
   TransactionFilter,
+  BudgetReport,
+  AuthUser,
+  LoginResponse,
 } from '@homefinance/shared';
 
 export const api = createApi({
   reducerPath: 'api',
-  baseQuery: fetchBaseQuery({ baseUrl: '/api' }),
-  tagTypes: ['Member', 'Account', 'Category', 'Rule', 'Transaction', 'ImportBatch', 'Mapping', 'Insight', 'Setting', 'Backup', 'Investment', 'Price', 'TestHistory', 'Budget'],
+  baseQuery: fetchBaseQuery({ baseUrl: '/api', credentials: 'include' }),
+  tagTypes: ['Auth', 'Member', 'Account', 'Category', 'Rule', 'Transaction', 'ImportBatch', 'Mapping', 'Insight', 'Setting', 'Backup', 'Investment', 'Price', 'TestHistory', 'Budget'],
   endpoints: (b) => ({
+    // ---- Auth ----
+    login: b.mutation<LoginResponse, { username: string; password: string }>({
+      query: (body) => ({ url: '/auth/login', method: 'POST', body }),
+      invalidatesTags: ['Auth'],
+    }),
+    logout: b.mutation<{ ok: true }, void>({
+      query: () => ({ url: '/auth/logout', method: 'POST' }),
+      invalidatesTags: ['Auth'],
+    }),
+    getMe: b.query<{ user: AuthUser; mustResetPassword: boolean } | null, void>({
+      query: () => '/auth/me',
+      providesTags: ['Auth'],
+    }),
+    changePassword: b.mutation<{ ok: true }, { currentPassword: string; newPassword: string }>({
+      query: (body) => ({ url: '/auth/change-password', method: 'POST', body }),
+      // NOTE: no invalidatesTags here. The component optimistically flips
+      // mustResetPassword in the getMe cache via updateQueryData; invalidating
+      // 'Auth' would reset the cache to the last server-fulfilled value
+      // (mustReset=true) during the refetch and bounce RequireAuth back to
+      // /change-password. The server has already committed mustReset=false, and
+      // the optimistic patch matches, so no refetch is needed.
+    }),
+
     // ---- Members ----
     listMembers: b.query<MemberDto[], void>({ query: () => '/members', providesTags: ['Member'] }),
     createMember: b.mutation<MemberDto, Partial<MemberDto>>({ query: (body) => ({ url: '/members', method: 'POST', body }), invalidatesTags: ['Member'] }),
@@ -116,7 +142,11 @@ export const api = createApi({
     getCategoryAnalytics: b.query<CategoryAnalytics, { preset?: string; dateFrom?: string; dateTo?: string; accountId?: string; memberId?: string; categoryId?: string[]; includeIncome?: boolean }>({
       query: (p) => ({ url: '/reports/category-analytics', params: { ...p, categoryId: p.categoryId?.join(',') } }),
     }),
+    getBudgetReport: b.query<BudgetReport, { preset?: string; dateFrom?: string; dateTo?: string; accountId?: string; memberId?: string; categoryId?: string[] }>({
+      query: (p) => ({ url: '/reports/budget', params: { ...p, categoryId: p.categoryId?.join(',') } }),
+    }),
     generateForecastReport: b.mutation<ForecastReport, { accountId?: string[]; memberId?: string[] }>({ query: (body) => ({ url: '/ai/forecast-report', method: 'POST', body }) }),
+    generateBudgets: b.mutation<{ jobId: string }, void>({ query: () => ({ url: '/ai/budgets/suggest', method: 'POST' }) }),
 
     // ---- Budgets ----
     listBudgets: b.query<BudgetDto[], void>({ query: () => '/budgets', providesTags: ['Budget'] }),
@@ -153,6 +183,7 @@ export const api = createApi({
 
 // RTK Query auto-generates hooks on the `api` object (e.g. api.useListMembersQuery).
 export const {
+  useLoginMutation, useLogoutMutation, useGetMeQuery, useChangePasswordMutation,
   useListMembersQuery, useCreateMemberMutation, useUpdateMemberMutation, useDeleteMemberMutation,
   useListAccountsQuery, useCreateAccountMutation, useUpdateAccountMutation, useDeleteAccountMutation,
   useListCategoriesQuery, useCreateCategoryMutation, useUpdateCategoryMutation, useDeleteCategoryMutation,
@@ -161,7 +192,7 @@ export const {
   useUploadImportMutation, useEstimateAiMutation, useCommitImportMutation, useListImportBatchesQuery, useDeleteImportBatchMutation, useClearImportHistoryMutation, useListMappingsQuery, useCreateMappingMutation, useDeleteMappingMutation,
   useGetOverviewQuery, useGetDeepDiveQuery,
   useGetPortfolioQuery, useListHoldingsQuery, useCreateHoldingMutation, useDeleteHoldingMutation, useImportHoldingsMutation, useRefreshPriceMutation,
-  useGetIncomeExpenseReportQuery, useGetCategoryAnalyticsQuery, useGenerateForecastReportMutation,
+  useGetIncomeExpenseReportQuery, useGetCategoryAnalyticsQuery, useGetBudgetReportQuery, useGenerateForecastReportMutation, useGenerateBudgetsMutation,
   useListBudgetsQuery, useUpsertBudgetMutation, useDeleteBudgetMutation,
   useAiStatusQuery, useGenerateInsightMutation, useLatestInsightQuery, useGenerateForecastMutation, useListAnomaliesQuery, useListSubscriptionsQuery, useListCloudModelsQuery, useTestConnectionMutation, useTestHistoryQuery, useSuggestAiCategoryMutation,
   useGetAiConfigQuery, useUpdateAiConfigMutation,

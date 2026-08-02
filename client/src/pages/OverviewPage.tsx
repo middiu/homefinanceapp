@@ -214,12 +214,14 @@ export default function OverviewPage() {
                     </div>
                     <div className="space-y-2">
                       {(list as any[]).map((a) => (
-                        <div key={a.id} className="flex items-center justify-between rounded-md border border-border p-2">
-                          <div className="min-w-0">
+                        <div key={a.id} className="flex items-center gap-3 rounded-md border border-border p-2">
+                          <div className="min-w-0 shrink-0">
                             <div className="text-sm font-medium">{a.name}</div>
                             {a.type === 'credit_card' && a.creditLimit != null && (
                               <div className="text-xs text-muted-foreground">avail {formatAUD(a.creditLimit + a.balance)}</div>
                             )}
+                          </div>
+                          <div className="min-w-0 flex-1">
                             <Sparkline data={a.spark} />
                           </div>
                           <Money amount={a.balance} />
@@ -297,8 +299,8 @@ function Sparkline({ data }: { data: number[] }) {
   const range = max - min || 1;
   const pts = data.map((v, i) => `${(i / (data.length - 1)) * 100},${30 - ((v - min) / range) * 30}`).join(' ');
   return (
-    <svg width="100" height="30" className="mt-0.5 opacity-70">
-      <polyline points={pts} fill="none" stroke="#3b82f6" strokeWidth="1.5" />
+    <svg viewBox="0 0 100 30" preserveAspectRatio="none" width="100%" height={30} className="mt-0.5 opacity-70">
+      <polyline points={pts} fill="none" stroke="#3b82f6" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
     </svg>
   );
 }

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Self-hosted personal household-finance app. Import bank exports (CSV/OFX/QIF), categorize (manual / rule engine / AI), visualize spending with ownership-weighted member splits, and generate AI insights/forecasts/anomaly+subscription detection. Single implicit household, **no in-app auth** — do not expose publicly; deploy behind VPN/reverse proxy (see `docs/deployment.md`).
+Self-hosted personal household-finance app. Import bank exports (CSV/OFX/QIF), categorize (manual / rule engine / AI), visualize spending with ownership-weighted member splits, and generate AI insights/forecasts/anomaly+subscription detection. Single implicit household, **single-user auth** (one `admin` user, argon2id-hashed password, opaque HttpOnly SameSite session cookies, forced password reset on first login, brute-force protected via IP rate-limit + account lockout). TLS + a network perimeter are still recommended for public exposure (see `docs/deployment.md`).
 
 ## Commands
 
@@ -97,6 +97,18 @@ Long-running AI ops (insight, forecast, forecast-report, re-categorize, **import
 - Transfers: credit-card ↔ repayment pairs auto-linked (`services/transfers.ts`); `isTransfer` + `linkedTransactionId` on the transaction.
 - Categories carry a `type`: `income | expense | transfer`.
 - Tests use a per-process temp SQLite (`__tests__/dbHelper.ts` sets `DATABASE_URL` before importing the app's DB module — import order matters).
+
+### Authentication
+
+Single-user auth. One `admin` row in the `users` table, seeded on first boot by `seedAdmin()` (`services/auth.ts`) with `ADMIN_INITIAL_PASSWORD` (default `Pa$$word!`) and `mustResetPassword=true` — the first sign-in forces a password change (client `RequireAuth` gate in `client/src/app/auth.tsx` redirects to `/change-password` until cleared).
+
+- **Passwords**: argon2id (`@node-rs/argon2`, OWASP params m=19456/t=2/p=1) — never stored or logged in cleartext; never sent to the client.
+- **Sessions**: opaque random 32-byte token in an `hf_session` **HttpOnly + SameSite=Lax + Secure** cookie; only the **SHA-256 hash** of the token is stored in the `sessions` table (DB leak doesn't expose live tokens; sessions revocable; survive restart). Sliding 7-day expiry (`SESSION_TTL_MS`).
+- **Brute force**: `express-rate-limit` on `/api/auth/login` (10/15min/IP) **plus** account lockout tracked in the `users` row (`failedAttempts`/`lockedUntil`, progressive, capped 30min) — `recordFailedLogin`/`recordSuccess` in `services/auth.ts`. Generic "invalid credentials" errors (no enumeration). A dummy argon2 verify runs when the username is unknown to blunt timing.
+- **Middleware**: `requireAuth` (`middleware/auth.ts`) guards every `/api/*` router **except** `/api/auth/*` and `/api/health`. It reads the cookie via `cookieParser`, looks up the session, attaches `req.user`. `helmet` adds security headers + a bounded CSP.
+- **Endpoints** (`routes/auth.ts`): `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/me` (401 when unauthed — drives the client redirect), `POST /api/auth/change-password` (invalidates all other sessions).
+- **Client**: `fetchBaseQuery({ credentials: 'include' })` so the cookie is sent; `useGetMeQuery` on app boot powers `RequireAuth`; `LoginPage` + `ChangePasswordPage` are the only routes outside the guard.
+- Config keys in `server/src/config.ts` under `config.auth` + `config.corsOrigin`; env vars documented in `.env.example` and `docs/deployment.md`.
 
 ## Docs
 

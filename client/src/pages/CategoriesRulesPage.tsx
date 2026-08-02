@@ -38,8 +38,39 @@ function CategoriesTab() {
   const [parentId, setParentId] = useState('');
   const [type, setType] = useState<CategoryType | ''>('');
   return (
-    <div className="grid gap-4 lg:grid-cols-3">
-      <Card className="lg:col-span-2">
+    <div className="space-y-4">
+      <Card>
+        <CardHeader><CardTitle>Add category</CardTitle></CardHeader>
+        <CardContent>
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="min-w-[12rem] flex-1">
+              <Label>Name</Label>
+              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Pet Supplies" />
+            </div>
+            <div className="min-w-[10rem]">
+              <Label>Type</Label>
+              <Select value={type} onChange={(e) => setType(e.target.value as CategoryType | '')}>
+                <option value="">— auto —</option>
+                <option value="expense">Expense</option>
+                <option value="income">Income</option>
+                <option value="transfer">Transfer</option>
+                <option value="investment">Investment</option>
+              </Select>
+            </div>
+            <div className="min-w-[12rem]">
+              <Label>Parent (optional)</Label>
+              <Select value={parentId} onChange={(e) => setParentId(e.target.value)}>
+                <option value="">— none —</option>
+                {(data ?? []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </Select>
+            </div>
+            <Button onClick={() => { if (name) { create({ name, parentId: parentId || null, isCustom: true, type: type || null }); setName(''); setParentId(''); setType(''); } }}>
+              <Plus className="h-4 w-4" /> Add
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+      <Card>
         <CardHeader><CardTitle>Categories</CardTitle></CardHeader>
         <CardContent>
           {(data ?? []).length === 0 ? <EmptyState message="No categories" /> : (
@@ -68,32 +99,6 @@ function CategoriesTab() {
               ))}
             </div>
           )}
-        </CardContent>
-      </Card>
-      <Card>
-        <CardHeader><CardTitle>Add category</CardTitle></CardHeader>
-        <CardContent className="space-y-3">
-          <div><Label>Name</Label><Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Pet Supplies" /></div>
-          <div>
-            <Label>Type</Label>
-            <Select value={type} onChange={(e) => setType(e.target.value as CategoryType | '')}>
-              <option value="">— auto —</option>
-              <option value="expense">Expense</option>
-              <option value="income">Income</option>
-              <option value="transfer">Transfer</option>
-              <option value="investment">Investment</option>
-            </Select>
-          </div>
-          <div>
-            <Label>Parent (optional)</Label>
-            <Select value={parentId} onChange={(e) => setParentId(e.target.value)}>
-              <option value="">— none —</option>
-              {(data ?? []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </Select>
-          </div>
-          <Button onClick={() => { if (name) { create({ name, parentId: parentId || null, isCustom: true, type: type || null }); setName(''); setParentId(''); setType(''); } }}>
-            <Plus className="h-4 w-4" /> Add
-          </Button>
         </CardContent>
       </Card>
     </div>

@@ -1,20 +1,43 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useDispatch } from 'react-redux';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Trash2 } from 'lucide-react';
-import { useListBudgetsQuery, useUpsertBudgetMutation, useDeleteBudgetMutation, useListCategoriesQuery, useGetCategoryAnalyticsQuery } from '@/app/api';
+import { Trash2, Sparkles } from 'lucide-react';
+import { useListBudgetsQuery, useUpsertBudgetMutation, useDeleteBudgetMutation, useListCategoriesQuery, useGetCategoryAnalyticsQuery, useAiStatusQuery, useGenerateBudgetsMutation, api } from '@/app/api';
 import { PageHeader, EmptyState } from '@/components/common';
+import { JobProgressModal } from '@/components/JobProgressModal';
 import { formatAUD } from '@/lib/utils';
 import type { BudgetDto } from '@homefinance/shared';
 
+interface BudgetChange {
+  categoryId: string;
+  categoryName: string;
+  previous: number | null;
+  new: number;
+  reason: string;
+}
+
 export default function BudgetsPage() {
+  const dispatch = useDispatch();
   const { data: budgets = [], isLoading: budgetsLoading } = useListBudgetsQuery();
   const { data: categories = [] } = useListCategoriesQuery();
   const [upsertBudget] = useUpsertBudgetMutation();
   const [deleteBudget] = useDeleteBudgetMutation();
   const { data: analytics } = useGetCategoryAnalyticsQuery({ preset: 'thisMonth' } as any);
+  const { data: aiStatus } = useAiStatusQuery();
+  const [generateBudgets] = useGenerateBudgetsMutation();
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [summary, setSummary] = useState<BudgetChange[] | null>(null);
+
+  const aiEnabled = !!aiStatus?.enabled;
+
+  async function startBudgets() {
+    setSummary(null);
+    const r: any = await generateBudgets();
+    setJobId(r.data?.jobId ?? null);
+  }
 
   const budgetByCat = useMemo(() => new Map(budgets.map((b: BudgetDto) => [b.categoryId, b.monthlyAmount])), [budgets]);
   const actualByCat = useMemo(() => {
@@ -59,7 +82,38 @@ export default function BudgetsPage() {
 
   return (
     <div>
-      <PageHeader title="Budgets" subtitle="Set monthly budgets per category and compare against this month's spend" />
+      <PageHeader
+        title="Budgets"
+        subtitle="Set monthly budgets per category and compare against this month's spend"
+        actions={
+          <Button variant="outline" size="sm" onClick={startBudgets} disabled={!aiEnabled} title={aiEnabled ? 'Generate / suggest budgets using AI (24-mo history + AU cost-of-living research)' : 'Enable AI in AI & Insights settings first'}>
+            <Sparkles className="h-4 w-4" /> AI Budget Assistant
+          </Button>
+        }
+      />
+
+      {summary && summary.length > 0 && (
+        <Card className="mb-4 border-primary/40">
+          <CardHeader className="flex-row items-center justify-between">
+            <div>
+              <CardTitle className="flex items-center gap-2"><Sparkles className="h-4 w-4" /> AI applied {summary.length} budget{summary.length === 1 ? '' : 's'}</CardTitle>
+              <CardDescription>Based on 24 months of history + AU cost-of-living research</CardDescription>
+            </div>
+            <Button variant="ghost" size="sm" onClick={() => setSummary(null)}>Dismiss</Button>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-1">
+              {summary.map((c) => (
+                <div key={c.categoryId} className="grid grid-cols-12 items-center gap-2 rounded-md border border-border px-2 py-1.5 text-sm">
+                  <span className="col-span-3 truncate font-medium">{c.categoryName}</span>
+                  <span className="col-span-3 text-muted-foreground">{c.previous == null ? 'no budget' : formatAUD(c.previous)} → <span className="font-medium text-foreground">{formatAUD(c.new)}</span></span>
+                  <span className="col-span-6 truncate text-xs text-muted-foreground">{c.reason}</span>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-1">
@@ -153,6 +207,16 @@ export default function BudgetsPage() {
           )}
         </CardContent>
       </Card>
+
+      <JobProgressModal
+        jobId={jobId}
+        title="AI Budget Assistant"
+        onDone={(result: any) => {
+          dispatch(api.util.invalidateTags(['Budget']));
+          setSummary(result?.changes ?? []);
+        }}
+        onClose={() => setJobId(null)}
+      />
     </div>
   );
 }

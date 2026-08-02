@@ -159,6 +159,24 @@ const DDL = [
     applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     count INTEGER NOT NULL DEFAULT 0
   )`,
+  `CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    must_reset_password INTEGER NOT NULL DEFAULT 1,
+    failed_attempts INTEGER NOT NULL DEFAULT 0,
+    locked_until INTEGER NOT NULL DEFAULT 0,
+    last_login_at INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at INTEGER NOT NULL,
+    last_seen_at INTEGER NOT NULL
+  )`,
 ];
 
 // Indexes created AFTER migrations, so they can reference Phase 2 columns
@@ -177,6 +195,7 @@ const INDEX_DDL = [
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_price_snapshot_ticker_date ON price_snapshots(ticker, snapshot_date)`,
   `CREATE INDEX IF NOT EXISTS idx_ai_catlog_batch ON ai_categorization_log(batch_id)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_budgets_category ON category_budgets(category_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)`,
 ];
 
 // Columns added in Phase 2 to pre-existing Phase 1 tables. Each is applied only if the

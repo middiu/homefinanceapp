@@ -189,3 +189,29 @@ export const seedRulesApplied = sqliteTable('seed_rules_applied', {
   appliedAt: text('applied_at').notNull().default(sql`CURRENT_TIMESTAMP`),
   count: integer('count').notNull().default(0),
 });
+
+// ---- Single-user authentication ----
+// One row (admin) is the only user. passwordHash = argon2id. mustResetPassword
+// forces a password change on first login (seeded true). failedAttempts +
+// lockedUntil drive progressive account lockout against brute force.
+export const users = sqliteTable('users', {
+  id: text('id').primaryKey(),
+  username: text('username').notNull().unique(),
+  passwordHash: text('password_hash').notNull(),
+  mustResetPassword: integer('must_reset_password', { mode: 'boolean' }).notNull().default(true),
+  failedAttempts: integer('failed_attempts').notNull().default(0),
+  lockedUntil: integer('locked_until').notNull().default(0), // epoch ms
+  lastLoginAt: integer('last_login_at').notNull().default(0), // epoch ms
+  createdAt: text('created_at').notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text('updated_at').notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+// Opaque session tokens. tokenHash = sha256(raw token); the raw token lives only
+// in the HttpOnly cookie. Sliding expiry via lastSeenAt/expiresAt on lookup.
+export const sessions = sqliteTable('sessions', {
+  tokenHash: text('token_hash').primaryKey(),
+  userId: text('user_id').notNull(),
+  createdAt: text('created_at').notNull().default(sql`CURRENT_TIMESTAMP`),
+  expiresAt: integer('expires_at').notNull(), // epoch ms
+  lastSeenAt: integer('last_seen_at').notNull(), // epoch ms
+});

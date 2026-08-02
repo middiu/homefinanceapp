@@ -2,12 +2,17 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import morgan from 'morgan';
+import helmet from 'helmet';
+import cookieParser from 'cookie-parser';
 import path from 'node:path';
 import fs from 'node:fs';
 import cron from 'node-cron';
 import { config } from './config.js';
 import { bootstrap } from './db/bootstrap.js';
 import { seedDefaults } from './db/seed.js';
+import { seedAdmin, pruneExpiredSessions } from './services/auth.js';
+import { requireAuth } from './middleware/auth.js';
+import authRouter from './routes/auth.js';
 import membersRouter from './routes/members.js';
 import accountsRouter from './routes/accounts.js';
 import categoriesRouter from './routes/categories.js';
@@ -28,12 +33,29 @@ import { linkTransfers } from './services/transfers.js';
 import { getDb, schema } from './db/index.js';
 
 const app = express();
-app.use(cors());
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", 'data:'],
+      connectSrc: ["'self'"],
+      fontSrc: ["'self'", 'data:'],
+      objectSrc: ["'none'"],
+      baseUri: ["'self'"],
+      frameAncestors: ["'none'"],
+    },
+  },
+}));
+app.use(cors({ origin: config.corsOrigin, credentials: true }));
 app.use(express.json({ limit: '50mb' }));
+app.use(cookieParser());
 app.use(morgan('dev'));
 
 // Ensure DB tables exist on boot.
 bootstrap();
+pruneExpiredSessions();
 const seeded = seedDefaults();
 console.log(`[db] seeded: ${seeded.categories} categories, ${seeded.rules} rules (added ${seeded.rulesAdded} @ ${seeded.seedVersion})`);
 
@@ -66,6 +88,11 @@ cron.schedule('0 18 * * *', async () => {
 console.log('[cron] daily investment price snapshot scheduled: 0 18 * * *');
 
 const api = express.Router();
+// Public routes (mounted before requireAuth so the guard doesn't run for them):
+api.get('/health', (_req, res) => res.json({ ok: true }));
+api.use('/auth', authRouter);
+// Everything below requires a session.
+api.use(requireAuth);
 api.use('/members', membersRouter);
 api.use('/accounts', accountsRouter);
 api.use('/categories', categoriesRouter);
@@ -80,8 +107,6 @@ api.use('/investments', investmentsRouter);
 api.use('/reports', reportsRouter);
 api.use('/budgets', budgetsRouter);
 app.use('/api', api);
-
-app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
 // Serve built client in production (single-container deployment).
 const clientDist = path.resolve(config.clientDist);
@@ -112,11 +137,18 @@ if (config.backup.cron) {
   console.log(`[cron] daily DB backup scheduled: ${config.backup.cron}`);
 }
 
-const server = app.listen(config.port, () => {
-  console.log(`[server] HomeFinance API listening on http://localhost:${config.port}`);
-});
-
-process.on('SIGINT', () => server.close(() => process.exit(0)));
-process.on('SIGTERM', () => server.close(() => process.exit(0)));
+// Seed the single admin user (idempotent — first boot only) before serving traffic.
+void (async () => {
+  try {
+    await seedAdmin();
+  } catch (e) {
+    console.error('[auth] admin seed failed', (e as Error).message);
+  }
+  const server = app.listen(config.port, () => {
+    console.log(`[server] HomeFinance API listening on http://localhost:${config.port}`);
+  });
+  process.on('SIGINT', () => server.close(() => process.exit(0)));
+  process.on('SIGTERM', () => server.close(() => process.exit(0)));
+})();
 
 export { app };

@@ -293,6 +293,53 @@ export interface CategoryAnalytics {
   byMerchant: CategoryAnalyticsMerchantRow[];
 }
 
+// ---- Budget report (past trend + overspend analysis) ----
+// Current per-category monthly budgets (category_budgets) are applied
+// retroactively across the selected period — no per-month budget history.
+export interface BudgetReportMonth {
+  month: string;            // YYYY-MM
+  budget: number;           // Σ monthly budgets of in-scope budgeted categories (constant/month)
+  actual: number;           // actual spend in budgeted categories that month
+  unbudgeted: number;       // spend in non-budgeted expense categories that month
+  variance: number;         // actual - budget
+  adherencePct: number | null; // actual/budget*100 (null if budget 0)
+}
+
+export interface BudgetReportCategoryRow {
+  categoryId: string;
+  name: string;
+  monthlyBudget: number;
+  budget: number;           // monthlyBudget × monthsInPeriod
+  actual: number;           // period total
+  variance: number;         // actual - budget
+  variancePct: number | null;
+  monthsOver: number;      // months where actual > budget
+  monthsWithSpend: number;
+  monthly: { month: string; budget: number; actual: number }[];
+}
+
+export interface BudgetReport {
+  period: { from: string; to: string };
+  scope: { accountIds: string[] | null; memberId: string | null; categoryIds: string[] | null };
+  totals: {
+    budget: number; actual: number; variance: number; variancePct: number | null;
+    unbudgeted: number; monthsOver: number; monthsTotal: number;
+  };
+  monthly: BudgetReportMonth[];
+  byCategory: BudgetReportCategoryRow[];
+}
+
+// ---- Single-user authentication ----
+export interface AuthUser {
+  id: string;
+  username: string;
+  mustResetPassword: boolean;
+}
+export interface LoginResponse {
+  user: AuthUser;
+  mustResetPassword: boolean;
+}
+
 // Phase 2 §8 — 12-month forecast report
 export interface ForecastReport {
   history: { month: string; income: number; expense: number; net: number; actual: true }[];
