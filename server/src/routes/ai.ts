@@ -13,6 +13,7 @@ import {
   testHistory,
   buildForecastReport,
   generateBudgets,
+  suggestCategoryPrompt,
 } from '../services/ai.js';
 import { getDb, schema } from '../db/index.js';
 import { uid } from '../utils.js';
@@ -158,8 +159,7 @@ router.post('/suggest-category', async (req, res) => {
 
   const cats = getDb().select().from(schema.categories).all();
   const catList = cats.map((c) => c.name).join(', ');
-  // AI prompt includes the full raw description (Phase 2 §10).
-  const prompt = `Given this bank transaction description: "${parsed.data.description}"${parsed.data.amount ? ` (amount: ${parsed.data.amount} AUD)` : ''}, choose the single best category from this list: ${catList}. Reply with ONLY the exact category name, nothing else.`;
+  const prompt = suggestCategoryPrompt(parsed.data.description, parsed.data.amount, catList);
   try {
     const out = (await getProvider().chat(prompt)).trim();
     const match = cats.find((c) => c.name.toLowerCase() === out.toLowerCase() || out.toLowerCase().includes(c.name.toLowerCase()));

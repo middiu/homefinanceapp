@@ -28,11 +28,25 @@ export const attachSession = (req: Request, _res: Response, next: NextFunction) 
   next();
 };
 
-/** Middleware: require a valid session, else 401. */
+/** Middleware: require a valid session, else 401. Allows a password-reset session. */
+export const requireSession = (req: Request, res: Response, next: NextFunction) => {
+  loadSession(req);
+  if (!req.user) {
+    res.status(401).json({ error: 'unauthorized' });
+    return;
+  }
+  next();
+};
+
+/** Middleware: require a session that has finished the forced password reset. */
 export const requireAuth = (req: Request, res: Response, next: NextFunction) => {
   loadSession(req);
   if (!req.user) {
     res.status(401).json({ error: 'unauthorized' });
+    return;
+  }
+  if (req.user.mustResetPassword) {
+    res.status(403).json({ error: 'password reset required' });
     return;
   }
   next();

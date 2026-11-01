@@ -24,6 +24,13 @@ const SENSITIVE_PATTERNS: RegExp[] = [
   /\d{4,}/g, // any other run of 4+ digits (account/ref/transaction ids)
 ];
 
+/** Prompt for on-demand category suggestion. Description is sanitized first. */
+export function suggestCategoryPrompt(description: string, amount: number | undefined, categoryNames: string): string {
+  const safe = sanitizeForAi(description);
+  const amt = amount != null ? ` (amount: ${amount} AUD)` : '';
+  return `Given this bank transaction description: "${safe}"${amt}, choose the single best category from this list: ${categoryNames}. Reply with ONLY the exact category name, nothing else.`;
+}
+
 export function sanitizeForAi(desc: string): string {
   let s = (desc || '').replace(/\s+/g, ' ').trim();
   for (const re of SENSITIVE_PATTERNS) s = s.replace(re, '');
@@ -605,6 +612,26 @@ export async function buildForecastReport(filter?: { accountId?: string[]; membe
   let txns = d.select().from(schema.transactions).all().filter((t) => !t.isTransfer);
   if (filter?.accountId?.length) txns = txns.filter((t) => filter.accountId!.includes(t.accountId));
 
+  const accounts = d.select().from(schema.accounts).all();
+  const memberIds = filter?.memberId?.length ? [...new Set(filter.memberId)] : [];
+  // memberId → ownership-weighted share of each account (capped at 100).
+  const memberPct = new Map<string, number>();
+  if (memberIds.length) {
+    const own = ownershipMap();
+    const pool = filter?.accountId?.length
+      ? accounts.filter((a) => filter.accountId!.includes(a.id))
+      : accounts;
+    for (const a of pool) {
+      const members = own.get(a.id);
+      if (!members) continue;
+      let p = 0;
+      for (const m of memberIds) p += members.get(m) || 0;
+      if (p > 0) memberPct.set(a.id, Math.min(100, p));
+    }
+    txns = txns.filter((t) => memberPct.has(t.accountId));
+  }
+  const flowShare = (accountId: string) => (memberIds.length ? (memberPct.get(accountId) || 0) / 100 : 1);
+
   const now = new Date();
   // Trailing 12 months (including current).
   const histMonths: string[] = [];
@@ -615,8 +642,9 @@ export async function buildForecastReport(filter?: { accountId?: string[]; membe
     const m = t.date.slice(0, 7);
     if (!byMonth.has(m)) continue;
     const e = byMonth.get(m)!;
-    if (t.amount < 0) e.expense += -t.amount;
-    else e.income += t.amount;
+    const share = flowShare(t.accountId);
+    if (t.amount < 0) e.expense += -t.amount * share;
+    else e.income += t.amount * share;
   }
   const history = histMonths.map((m) => {
     const e = byMonth.get(m)!;
@@ -644,22 +672,9 @@ export async function buildForecastReport(filter?: { accountId?: string[]; membe
   // including transfers — money still moves between accounts). The previous
   // seed (last month's net flow) started near 0 and produced a meaningless
   // "end balance" of a few thousand instead of projecting from real net worth.
-  const accounts = d.select().from(schema.accounts).all();
   const scopedAccts = filter?.accountId?.length
     ? accounts.filter((a) => filter.accountId!.includes(a.id))
     : accounts;
-  // memberId filter → ownership-weighted share of each scoped account's balance.
-  const memberPct = new Map<string, number>();
-  if (filter?.memberId?.length) {
-    const own = ownershipMap();
-    for (const a of scopedAccts) {
-      const members = own.get(a.id);
-      if (!members) continue;
-      let p = 0;
-      for (const m of filter.memberId) p += members.get(m) || 0;
-      memberPct.set(a.id, Math.min(100, p));
-    }
-  }
   const balByAccount = new Map<string, number>();
   for (const a of scopedAccts) balByAccount.set(a.id, a.openingBalance);
   for (const t of d.select().from(schema.transactions).all()) {

@@ -249,6 +249,16 @@ export function bootstrap() {
     }
     // Indexes run last so they can reference migrated Phase 2 columns.
     for (const stmt of INDEX_DDL) sqlite.exec(stmt);
+    // Unique dedup is the real guard. Skip it when the live DB already has
+    // duplicate hashes — creating the index would abort boot.
+    const dupe = sqlite.prepare(
+      `SELECT 1 AS x FROM transactions GROUP BY dedup_hash HAVING COUNT(*) > 1 LIMIT 1`,
+    ).get();
+    if (dupe) {
+      console.warn('[db] duplicate dedup_hash rows exist; skipping unique dedup index');
+    } else {
+      sqlite.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_dedup_unique ON transactions(dedup_hash)`);
+    }
   });
   tx();
 }

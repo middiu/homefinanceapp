@@ -12,7 +12,7 @@ import {
   useCreateHoldingMutation, useDeleteHoldingMutation, useImportHoldingsMutation, useRefreshPriceMutation,
 } from '@/app/api';
 import { PageHeader, EmptyState, StatCard } from '@/components/common';
-import { formatAUD, formatDate, monthLabel, CHART_COLORS, pct } from '@/lib/utils';
+import { formatAUD, formatDate, monthLabel, CHART_COLORS, pct, localISODate } from '@/lib/utils';
 
 export default function InvestmentsPage() {
   const { data: accounts } = useListAccountsQuery();
@@ -168,7 +168,7 @@ export default function InvestmentsPage() {
 }
 
 function AddHoldingDialog({ accounts, onClose, onCreate }: { accounts: any[]; onClose: () => void; onCreate: (b: any) => void }) {
-  const [form, setForm] = useState({ accountId: accounts[0]?.id ?? '', ticker: '', purchaseDate: new Date().toISOString().slice(0, 10), quantity: '', purchasePrice: '', fees: '' });
+  const [form, setForm] = useState({ accountId: accounts[0]?.id ?? '', ticker: '', purchaseDate: localISODate(), quantity: '', purchasePrice: '', fees: '' });
   const valid = form.accountId && form.ticker && form.quantity && form.purchasePrice;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">

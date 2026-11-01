@@ -36,7 +36,16 @@ function loadOwnership(accountId: string): OwnershipDto[] {
     .map((o) => ({ memberId: o.memberId, percentage: o.percentage }));
 }
 
-function map(r: typeof schema.accounts.$inferSelect): AccountDto {
+function accountBalances(): Map<string, number> {
+  const bal = new Map<string, number>();
+  for (const a of db().select().from(schema.accounts).all()) bal.set(a.id, a.openingBalance);
+  for (const t of db().select({ accountId: schema.transactions.accountId, amount: schema.transactions.amount }).from(schema.transactions).all()) {
+    bal.set(t.accountId, (bal.get(t.accountId) || 0) + t.amount);
+  }
+  return bal;
+}
+
+function map(r: typeof schema.accounts.$inferSelect, balance?: number): AccountDto {
   return {
     id: r.id,
     name: r.name,
@@ -51,6 +60,7 @@ function map(r: typeof schema.accounts.$inferSelect): AccountDto {
     creditLimit: r.creditLimit ?? null,
     statementClosingDay: r.statementClosingDay ?? null,
     paymentDueDay: r.paymentDueDay ?? null,
+    balance,
   };
 }
 
@@ -69,7 +79,8 @@ function setOwnership(accountId: string, ownership: OwnershipDto[]) {
 }
 
 router.get('/', (_req, res) => {
-  res.json(db().select().from(schema.accounts).all().map(map));
+  const bal = accountBalances();
+  res.json(db().select().from(schema.accounts).all().map((a) => map(a, bal.get(a.id) ?? a.openingBalance)));
 });
 
 router.post('/', (req, res) => {

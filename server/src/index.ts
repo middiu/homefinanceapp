@@ -120,7 +120,7 @@ if (fs.existsSync(clientDist)) {
 
 app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   console.error('[server] error', err);
-  res.status(500).json({ error: (err as Error).message });
+  res.status(500).json({ error: 'internal error' });
 });
 
 // ---- Schedulers ----

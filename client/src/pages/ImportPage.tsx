@@ -22,7 +22,7 @@ import {
 import { useDispatch } from 'react-redux';
 import { JobProgressModal } from '@/components/JobProgressModal';
 import { PageHeader, EmptyState, Money } from '@/components/common';
-import { formatDate, formatAUD } from '@/lib/utils';
+import { formatDate, formatAUD, apiErrorMessage } from '@/lib/utils';
 import type { ImportFileFormat } from '@homefinance/shared';
 
 const FIELDS = ['date', 'time', 'description', 'amount', 'debit', 'credit', 'balance', 'reference'];
@@ -63,14 +63,14 @@ export default function ImportPage() {
       fd.append('accountId', accountId);
       fd.append('format', format);
       if (format === 'csv') fd.append('columnMap', JSON.stringify(columnMap));
-      const r: any = await upload(fd);
-      setPreview(r.data);
+      const r = await upload(fd).unwrap();
+      setPreview(r);
       setAiEstimate(null);
       // prefill columnMap from headers if empty
       if (format === 'csv' && Object.keys(columnMap).length === 0) {
         const auto: Record<string, string | null> = {};
         for (const f of FIELDS) {
-          const guess = (r.data.headers as string[]).find((h) => h.toLowerCase().includes(f === 'date' ? 'date' : f));
+          const guess = (r.headers as string[]).find((h: string) => h.toLowerCase().includes(f === 'date' ? 'date' : f));
           auto[f] = guess || null;
         }
         setColumnMap(auto);
@@ -80,11 +80,11 @@ export default function ImportPage() {
         fd2.append('accountId', accountId);
         fd2.append('format', format);
         fd2.append('columnMap', JSON.stringify(auto));
-        const r2: any = await upload(fd2);
-        setPreview(r2.data);
+        const r2 = await upload(fd2).unwrap();
+        setPreview(r2);
       }
-    } catch (e: any) {
-      setError(e.message);
+    } catch (e: unknown) {
+      setError(apiErrorMessage(e, 'Upload failed'));
     } finally {
       setBusy(false);
     }
@@ -105,11 +105,10 @@ export default function ImportPage() {
     setBusy(true); setError('');
     try {
       if (resolve === 'adjust' && bc) {
-        await updateAccount({ id: accountId, body: { openingBalance: bc.suggestedOpening } });
+        await updateAccount({ id: accountId, body: { openingBalance: bc.suggestedOpening } }).unwrap();
       }
       const rows = preview.rows.map((r: any) => ({ date: r.date, time: r.time, description: r.description, amount: r.amount, balance: r.balance, isDuplicate: r.isDuplicate }));
-      const res: any = await commit({ accountId, format, fileName: preview.fileName, rows, applyRules: true });
-      const data = res.data || {};
+      const data = await commit({ accountId, format, fileName: preview.fileName, rows, applyRules: true }).unwrap();
       // Records are in the DB now; clear the upload UI immediately. If the server
       // kicked off AI categorization as a background job, surface its progress.
       const dupes = rows.filter((r: any) => r.isDuplicate).length;
@@ -118,8 +117,8 @@ export default function ImportPage() {
       setPreview(null); setFile(null); setColumnMap({});
       refetch();
       if (data.jobId) setCatJobId(data.jobId);
-    } catch (e: any) {
-      setError(e.message);
+    } catch (e: unknown) {
+      setError(apiErrorMessage(e, 'Import failed'));
     } finally {
       setBusy(false);
     }
@@ -292,7 +291,7 @@ export default function ImportPage() {
       <JobProgressModal
         jobId={catJobId}
         title="Categorizing imported transactions"
-        onDone={() => { dispatch(api.util.invalidateTags(['Transaction'])); setNotice('Categorization complete.'); }}
+        onDone={() => { dispatch(api.util.invalidateTags(['Transaction', 'Dashboard', 'Report'])); setNotice('Categorization complete.'); }}
         onClose={() => setCatJobId(null)}
       />
 

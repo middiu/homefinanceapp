@@ -1,7 +1,14 @@
-import { SQL, and, eq, gte, lte, like, or, desc, asc, sql } from 'drizzle-orm';
+import { SQL, and, eq, gte, lte, like, or, inArray } from 'drizzle-orm';
 import { getDb, schema, getSqlite } from '../db/index.js';
 import type { TransactionFilter, TransactionDto, PagedResult, CategorySource } from '@homefinance/shared';
-import { uid, dedupHash, nowISO, parseTime } from '../utils.js';
+
+export class DuplicateTransactionError extends Error {
+  constructor() {
+    super('duplicate transaction');
+    this.name = 'DuplicateTransactionError';
+  }
+}
+import { uid, dedupHash, parseTime } from '../utils.js';
 import { matchRule } from './rules.js';
 
 export function mapTx(r: typeof schema.transactions.$inferSelect): TransactionDto {
@@ -58,19 +65,17 @@ export function queryTransactions(filter: TransactionFilter): { rows: (Transacti
   let memberPct = new Map<string, number>();
   if (filter.memberId?.length) {
     const own = ownershipMap();
+    const wanted = new Set(filter.memberId);
     const result = new Set<string>();
     for (const [acct, members] of own) {
-      for (const m of filter.memberId) {
-        if (members.has(m)) {
-          result.add(acct);
-          memberPct.set(acct, members.get(m)!);
-        }
+      for (const m of wanted) {
+        if (!members.has(m)) continue;
+        result.add(acct);
+        memberPct.set(acct, Math.min(100, (memberPct.get(acct) || 0) + members.get(m)!));
       }
     }
     memberAccountIds = result;
-    if (conds.length === 0 && memberAccountIds.size === 0) {
-      return { rows: [], total: 0 };
-    }
+    if (memberAccountIds.size === 0) return { rows: [], total: 0 };
     conds.push(or(...[...memberAccountIds].map((a) => eq(schema.transactions.accountId, a)))!);
   }
 
@@ -124,6 +129,8 @@ export function createManual(input: {
   const id = uid();
   const time = parseTime(input.time ?? null);
   const hash = dedupHash(input.accountId, input.date, input.amount, input.description, time);
+  const clash = d.select().from(schema.transactions).where(eq(schema.transactions.dedupHash, hash)).get();
+  if (clash) throw new DuplicateTransactionError();
   const r = d
     .insert(schema.transactions)
     .values({
@@ -144,6 +151,86 @@ export function createManual(input: {
     .returning()
     .get();
   return mapTx(r);
+}
+
+type TransactionPatch = {
+  categoryId?: string | null;
+  source?: CategorySource;
+  description?: string;
+  rawDescription?: string;
+  amount?: number;
+  date?: string;
+  time?: string | null;
+  isTransfer?: boolean;
+  needsReview?: boolean;
+};
+
+/** Apply a patch and recompute dedupHash when the identity fields change. */
+export function updateTransaction(id: string, patch: TransactionPatch): TransactionDto | 'notfound' | 'duplicate' {
+  const d = getDb();
+  const existing = d.select().from(schema.transactions).where(eq(schema.transactions.id, id)).get();
+  if (!existing) return 'notfound';
+  const date = patch.date ?? existing.date;
+  const amount = patch.amount ?? existing.amount;
+  const description = patch.description ?? existing.description;
+  const time = patch.time !== undefined ? parseTime(patch.time) : existing.time;
+  const hash = dedupHash(existing.accountId, date, amount, description, time);
+  if (hash !== existing.dedupHash) {
+    const clash = d.select().from(schema.transactions).where(eq(schema.transactions.dedupHash, hash)).get();
+    if (clash && clash.id !== id) return 'duplicate';
+  }
+  const set: Record<string, unknown> = { dedupHash: hash };
+  if (patch.categoryId !== undefined) set.categoryId = patch.categoryId;
+  if (patch.source !== undefined) set.source = patch.source;
+  if (patch.description !== undefined) set.description = patch.description;
+  if (patch.rawDescription !== undefined) set.rawDescription = patch.rawDescription;
+  if (patch.amount !== undefined) set.amount = patch.amount;
+  if (patch.date !== undefined) set.date = patch.date;
+  if (patch.time !== undefined) set.time = time;
+  if (patch.isTransfer !== undefined) set.isTransfer = patch.isTransfer;
+  if (patch.needsReview !== undefined) set.needsReview = patch.needsReview;
+  const r = d.update(schema.transactions).set(set).where(eq(schema.transactions.id, id)).returning().get();
+  return mapTx(r);
+}
+
+/** Delete one transaction and clear a transfer partner that pointed at it. */
+export function deleteTransaction(id: string): void {
+  const d = getDb();
+  const row = d.select().from(schema.transactions).where(eq(schema.transactions.id, id)).get();
+  if (!row) return;
+  d.update(schema.transactions)
+    .set({ isTransfer: false, linkedTransactionId: null })
+    .where(eq(schema.transactions.linkedTransactionId, id))
+    .run();
+  if (row.linkedTransactionId) {
+    d.update(schema.transactions)
+      .set({ isTransfer: false, linkedTransactionId: null })
+      .where(eq(schema.transactions.id, row.linkedTransactionId))
+      .run();
+  }
+  d.delete(schema.transactions).where(eq(schema.transactions.id, id)).run();
+}
+
+/** Undo one import batch: drop its rows, its AI log, and any partner links. */
+export function undoImportBatch(batchId: string): void {
+  const d = getDb();
+  getSqlite().transaction(() => {
+    const ids = d
+      .select({ id: schema.transactions.id })
+      .from(schema.transactions)
+      .where(eq(schema.transactions.importBatchId, batchId))
+      .all()
+      .map((r) => r.id);
+    if (ids.length) {
+      d.delete(schema.aiCategorizationLog).where(inArray(schema.aiCategorizationLog.transactionId, ids)).run();
+      d.update(schema.transactions)
+        .set({ isTransfer: false, linkedTransactionId: null })
+        .where(inArray(schema.transactions.linkedTransactionId, ids))
+        .run();
+    }
+    d.delete(schema.transactions).where(eq(schema.transactions.importBatchId, batchId)).run();
+    d.delete(schema.importBatches).where(eq(schema.importBatches.id, batchId)).run();
+  })();
 }
 
 /** Any manual confirm/edit clears needs_review (Phase 2 §3.2). */

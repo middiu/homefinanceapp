@@ -31,6 +31,38 @@ export function monthLabel(yyyymm: string): string {
   return d.toLocaleDateString('en-AU', { month: 'short', year: '2-digit' });
 }
 
+/** Local calendar date as yyyy-mm-dd. Avoids UTC so morning hours stay on today. */
+export function localISODate(d = new Date()): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/** Overview period select → dateFrom/dateTo for the summary cards. */
+export function overviewRange(preset: string, now = new Date()): { dateFrom: string; dateTo: string } {
+  const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  const dateTo = localISODate(end);
+  if (preset === 'ytd') return { dateFrom: `${now.getFullYear()}-01-01`, dateTo };
+  const months = preset === 'current' ? 1 : Number(preset);
+  const n = Number.isFinite(months) && months > 0 ? months : 1;
+  const start = new Date(now.getFullYear(), now.getMonth() - (n - 1), 1);
+  return { dateFrom: localISODate(start), dateTo };
+}
+
+/** Message from an RTK Query error (thrown unwrap or query `error`). */
+export function apiErrorMessage(e: unknown, fallback = 'Request failed'): string {
+  if (!e || typeof e !== 'object') return fallback;
+  const err = e as { data?: unknown; message?: string };
+  const data = err.data;
+  if (data && typeof data === 'object' && 'error' in data) {
+    const inner = (data as { error: unknown }).error;
+    if (typeof inner === 'string' && inner) return inner;
+  }
+  if (typeof err.message === 'string' && err.message && err.message !== 'Rejected') return err.message;
+  return fallback;
+}
+
 export function pct(n: number | null): string {
   if (n == null) return '—';
   const sign = n > 0 ? '+' : '';

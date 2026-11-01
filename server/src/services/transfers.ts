@@ -73,19 +73,24 @@ function linkPair(
     // Find best destination-side match: same date (±2 days), amount within $1, prefer description hint.
     let best: TxRow | null = null;
     let bestScore = Infinity;
+    let tie = false;
     for (const c of destCandidates) {
       if (usedDest.has(c.id)) continue;
       const dayDiff = Math.abs(daysBetween(r.date, c.date));
       const amtDiff = Math.abs(Math.abs(r.amount) - Math.abs(c.amount));
       if (dayDiff > 2) continue;
       if (amtDiff > 1) continue;
-      const score = dayDiff * 10 + amtDiff + (hintsDest ? 0 : 100);
+      const score = Math.round((dayDiff * 10 + amtDiff + (hintsDest ? 0 : 100)) * 100) / 100;
       if (score < bestScore) {
         bestScore = score;
         best = c;
+        tie = false;
+      } else if (score === bestScore) {
+        tie = true;
       }
     }
-    if (best) {
+    // Several equally good matches stay unlinked for a manual decision.
+    if (best && !tie) {
       usedSource.add(r.id);
       usedDest.add(best.id);
       pair(d, r, best);

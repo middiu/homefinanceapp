@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Loader2, CheckCircle2, XCircle } from 'lucide-react';
 import { useJobProgress } from '@/app/useJobProgress';
 import { Button } from '@/components/ui/button';
@@ -21,23 +21,26 @@ export function JobProgressModal({
 }) {
   const state = useJobProgress(jobId);
   const firedRef = useRef(false);
+  const [hidden, setHidden] = useState(false);
 
   useEffect(() => {
     if (state?.status === 'done' && !firedRef.current) {
       firedRef.current = true;
       onDone?.(state.result);
-      if (closeOnDone) onClose?.();
+      if (closeOnDone || hidden) onClose?.();
     }
     if (state?.status === 'error' && !firedRef.current) {
       firedRef.current = true;
+      if (hidden) setHidden(false);
     }
-  }, [state, onDone, onClose, closeOnDone]);
+  }, [state, onDone, onClose, closeOnDone, hidden]);
 
   useEffect(() => {
-    if (jobId) firedRef.current = false;
+    firedRef.current = false;
+    setHidden(false);
   }, [jobId]);
 
-  if (!jobId) return null;
+  if (!jobId || hidden) return null;
 
   const determinate = !!state && state.total > 0;
   const pct = determinate ? Math.min(100, Math.round((state!.progress / state!.total) * 100)) : 0;
@@ -79,7 +82,7 @@ export function JobProgressModal({
 
         <div className="mt-5 flex justify-end gap-2">
           {running ? (
-            <Button variant="ghost" onClick={onClose}>Hide</Button>
+            <Button variant="ghost" onClick={() => setHidden(true)}>Hide</Button>
           ) : (
             <Button onClick={onClose}>Close</Button>
           )}
