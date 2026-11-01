@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useDispatch } from 'react-redux';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, Legend, CartesianGrid, Line, LineChart, ComposedChart, Area, AreaChart } from 'recharts';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from '@/components/ui/card';
@@ -10,14 +10,15 @@ import { useGetOverviewQuery, useGenerateInsightMutation, useListAccountsQuery, 
 import { PageHeader, StatCard, EmptyState, Money, DeltaBadge } from '@/components/common';
 import { CategorySelect } from '@/components/CategorySelect';
 import { JobProgressModal } from '@/components/JobProgressModal';
-import { formatAUD, formatDate, monthLabel, CHART_COLORS, pct } from '@/lib/utils';
+import { formatAUD, formatDate, monthLabel, CHART_COLORS, pct, overviewRange } from '@/lib/utils';
 
 export default function OverviewPage() {
   const [range, setRange] = useState('current');
   const [insightJobId, setInsightJobId] = useState<string | null>(null);
   const navigate = useNavigate();
   const dispatch = useDispatch();
-  const { data, isLoading } = useGetOverviewQuery({});
+  const rangeQuery = useMemo(() => overviewRange(range), [range]);
+  const { data, isLoading, isError } = useGetOverviewQuery(rangeQuery);
   const { data: accounts } = useListAccountsQuery();
   const { data: members } = useListMembersQuery();
   const [generateInsight] = useGenerateInsightMutation();
@@ -32,7 +33,8 @@ export default function OverviewPage() {
     }
   }
 
-  if (isLoading || !data) return <div className="text-muted-foreground">Loading dashboard…</div>;
+  if (isLoading) return <div className="text-muted-foreground">Loading dashboard…</div>;
+  if (isError || !data) return <div className="text-muted-foreground">Could not load the dashboard.</div>;
 
   const s = data.summary;
   const pie = data.spendingByCategory;
@@ -48,6 +50,8 @@ export default function OverviewPage() {
 
   // collect category names for stacked bar
   const catNames = Array.from(new Set(catTrend.flatMap((m: any) => Object.keys(m.categories) as string[]))) as string[];
+  const periodLabel = range === 'current' ? 'this month' : 'in period';
+  const periodCard = range === 'current' ? 'This month' : 'Selected period';
 
   return (
     <div>
@@ -72,8 +76,8 @@ export default function OverviewPage() {
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
         <StatCard label="Total balance" value={formatAUD(s.totalBalance)} />
-        <StatCard label="Spend this month" value={formatAUD(s.currentSpend)} delta={s.spendDeltaPct} />
-        <StatCard label="Income this month" value={formatAUD(s.currentIncome)} delta={s.incomeDeltaPct} />
+        <StatCard label={`Spend ${periodLabel}`} value={formatAUD(s.currentSpend)} delta={s.spendDeltaPct} />
+        <StatCard label={`Income ${periodLabel}`} value={formatAUD(s.currentIncome)} delta={s.incomeDeltaPct} />
         <StatCard label="Net cash flow" value={formatAUD(s.netCashFlow)} tone={s.netCashFlow >= 0 ? 'positive' : 'negative'} />
         <StatCard label="Last month spend" value={formatAUD(s.previousSpend)} />
         <StatCard label="Accounts" value={String(accounts?.length ?? 0)} hint={`${members?.length ?? 0} members`} />
@@ -81,7 +85,7 @@ export default function OverviewPage() {
 
       <div className="mt-4 grid gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-1">
-          <CardHeader><CardTitle>Spending by category</CardTitle><CardDescription>This month</CardDescription></CardHeader>
+          <CardHeader><CardTitle>Spending by category</CardTitle><CardDescription>{periodCard}</CardDescription></CardHeader>
           <CardContent>
             {pie.length === 0 ? <EmptyState message="No spending yet" /> : (
               <ResponsiveContainer width="100%" height={260}>

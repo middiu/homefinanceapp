@@ -13,7 +13,9 @@ import { formatAUD, formatDate, monthLabel, CHART_COLORS } from '@/lib/utils';
 
 export default function DeepDivePage() {
   const [params, setParams] = useSearchParams();
-  const scopeType = params.get('memberId') ? 'member' : params.get('accountId') ? 'account' : 'member';
+  const urlType: 'member' | 'account' | null = params.get('accountId') ? 'account' : params.get('memberId') ? 'member' : null;
+  const [pickedType, setPickedType] = useState<'member' | 'account'>(urlType ?? 'member');
+  const scopeType = urlType ?? pickedType;
   const [scopeId, setScopeId] = useState(params.get('memberId') || params.get('accountId') || '');
   const { data: members } = useListMembersQuery();
   const { data: accounts } = useListAccountsQuery();
@@ -36,6 +38,7 @@ export default function DeepDivePage() {
   const [updateTx] = useUpdateTransactionMutation();
 
   function setScope(type: 'member' | 'account', id: string) {
+    setPickedType(type);
     setScopeId(id);
     const next = new URLSearchParams();
     if (id) next.set(type === 'member' ? 'memberId' : 'accountId', id);

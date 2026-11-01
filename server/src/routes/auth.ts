@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import rateLimit from 'express-rate-limit';
 import { config } from '../config.js';
-import { SESSION_COOKIE, requireAuth, attachSession } from '../middleware/auth.js';
+import { SESSION_COOKIE, requireSession, attachSession } from '../middleware/auth.js';
 import {
   getUserByUsername,
   verifyPassword,
@@ -112,7 +112,7 @@ router.get('/me', (req: Request, res: Response) => {
 });
 
 // POST /api/auth/change-password
-router.post('/change-password', requireAuth, async (req: Request, res: Response) => {
+router.post('/change-password', requireSession, async (req: Request, res: Response) => {
   const parsed = changePwBody.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: 'password must be 12–128 characters' });

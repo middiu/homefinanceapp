@@ -1,34 +1,46 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { eq } from 'drizzle-orm';
-import { getDb, schema, getSqlite } from '../db/index.js';
-import { paged, createManual, bulkCategorize, mapTx, categorizeViaRules, markReviewed, deleteAllTransactions } from '../services/transactions.js';
+import { paged, createManual, DuplicateTransactionError, updateTransaction, bulkCategorize, categorizeViaRules, markReviewed, deleteAllTransactions, deleteTransaction } from '../services/transactions.js';
 import { recategorizeTransactions } from '../services/ai.js';
 import { manualLink, manualUnlink } from '../services/transfers.js';
 import { createJob, finishJob, failJob } from '../services/jobs.js';
 import type { CategorySource } from '@homefinance/shared';
 
 const router = Router();
-const db = () => getDb();
 
-const filterSchema = z.object({
-  accountId: z.array(z.string()).optional(),
-  categoryId: z.array(z.string()).optional(),
-  memberId: z.array(z.string()).optional(),
+// Query strings arrive as a single value (`accountId=id`) or a repeated key.
+// Accept either, plus a comma-separated list, and always hand the service string[].
+const stringList = z.union([z.string(), z.array(z.string())]).optional().transform((v) => {
+  if (v == null || v === '') return undefined;
+  const parts = (Array.isArray(v) ? v : [v]).flatMap((s) => s.split(',')).map((s) => s.trim()).filter(Boolean);
+  return parts.length ? parts : undefined;
+});
+
+// z.coerce.boolean() uses Boolean(), so the string "false" becomes true.
+const queryBool = z.union([z.boolean(), z.enum(['true', 'false', '1', '0'])]).optional().transform((v) => {
+  if (v == null) return undefined;
+  if (typeof v === 'boolean') return v;
+  return v === 'true' || v === '1';
+});
+
+export const transactionFilterSchema = z.object({
+  accountId: stringList,
+  categoryId: stringList,
+  memberId: stringList,
   dateFrom: z.string().optional(),
   dateTo: z.string().optional(),
   amountMin: z.coerce.number().optional(),
   amountMax: z.coerce.number().optional(),
   search: z.string().optional(),
-  needsReview: z.coerce.boolean().optional(),
-  isTransfer: z.coerce.boolean().optional(),
+  needsReview: queryBool,
+  isTransfer: queryBool,
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(500).default(50),
   sort: z.string().optional(),
 });
 
 router.get('/', (req, res) => {
-  const parsed = filterSchema.safeParse(req.query);
+  const parsed = transactionFilterSchema.safeParse(req.query);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   res.json(paged(parsed.data));
 });
@@ -46,7 +58,12 @@ const manualSchema = z.object({
 router.post('/', (req, res) => {
   const parsed = manualSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  res.status(201).json(createManual(parsed.data));
+  try {
+    res.status(201).json(createManual(parsed.data));
+  } catch (e) {
+    if (e instanceof DuplicateTransactionError) return res.status(409).json({ error: e.message });
+    throw e;
+  }
 });
 
 router.put('/:id', (req, res) => {
@@ -70,18 +87,14 @@ router.put('/:id', (req, res) => {
     patch.needsReview = false;
   }
   if (parsed.data.needsReview !== undefined) patch.needsReview = parsed.data.needsReview;
-  const r = db()
-    .update(schema.transactions)
-    .set(patch)
-    .where(eq(schema.transactions.id, req.params.id))
-    .returning()
-    .get();
-  if (!r) return res.status(404).json({ error: 'not found' });
-  res.json(mapTx(r));
+  const result = updateTransaction(req.params.id, patch);
+  if (result === 'notfound') return res.status(404).json({ error: 'not found' });
+  if (result === 'duplicate') return res.status(409).json({ error: 'duplicate transaction' });
+  res.json(result);
 });
 
 router.delete('/:id', (req, res) => {
-  db().delete(schema.transactions).where(eq(schema.transactions.id, req.params.id)).run();
+  deleteTransaction(req.params.id);
   res.status(204).end();
 });
 

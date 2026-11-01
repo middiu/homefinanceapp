@@ -58,7 +58,7 @@ function AccountsTab() {
                   <div className="text-sm font-medium">
                     {a.name} {a.isArchived && <Badge tone="muted">archived</Badge>}
                     {a.type === 'credit_card' && a.creditLimit != null && (
-                      <Badge tone="default" className="ml-1">avail {formatAUD(a.creditLimit)}</Badge>
+                      <Badge tone="default" className="ml-1">avail {formatAUD(a.creditLimit + (a.balance ?? a.openingBalance))}</Badge>
                     )}
                   </div>
                   <div className="text-xs text-muted-foreground">

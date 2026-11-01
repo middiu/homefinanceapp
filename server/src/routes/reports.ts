@@ -83,12 +83,17 @@ router.get('/income-expense-by-category', (req, res) => {
     .all()
     .filter((t) => !t.isTransfer && !(t.categoryId != null && transferCatIds.has(t.categoryId)));
   if (accountId) txns = txns.filter((t) => t.accountId === accountId);
+  const scopePct = new Map<string, number>();
   if (memberId) {
     const own = ownershipMap();
-    const memberAccts = new Set<string>();
-    for (const [acct, members] of own) if (members.has(memberId)) memberAccts.add(acct);
-    txns = txns.filter((t) => memberAccts.has(t.accountId));
+    for (const a of d.select().from(schema.accounts).all()) {
+      const p = own.get(a.id)?.get(memberId) || 0;
+      if (p > 0 && (!accountId || a.id === accountId)) scopePct.set(a.id, p);
+    }
+    txns = txns.filter((t) => scopePct.has(t.accountId));
   }
+  const signedShare = (t: { amount: number; accountId: string }) =>
+    memberId ? (t.amount * (scopePct.get(t.accountId) || 0)) / 100 : t.amount;
 
   const inRange = (date: string, from: string, to: string) => date >= from && date <= to;
   const cur = new Map<string, { income: number; expense: number }>();
@@ -105,13 +110,15 @@ router.get('/income-expense-by-category', (req, res) => {
       const me = monthly.get(m)!;
       if (!cur.has(catKey)) cur.set(catKey, { income: 0, expense: 0 });
       const e = cur.get(catKey)!;
-      if (t.amount < 0) { e.expense += -t.amount; me.expense += -t.amount; }
-      else { e.income += t.amount; me.income += t.amount; }
+      const amt = signedShare(t);
+      if (amt < 0) { e.expense += -amt; me.expense += -amt; }
+      else { e.income += amt; me.income += amt; }
     } else if (inRange(t.date, prev.from, prev.to)) {
       if (!prevMap.has(catKey)) prevMap.set(catKey, { income: 0, expense: 0 });
       const e = prevMap.get(catKey)!;
-      if (t.amount < 0) e.expense += -t.amount;
-      else e.income += t.amount;
+      const amt = signedShare(t);
+      if (amt < 0) e.expense += -amt;
+      else e.income += amt;
     }
   }
 

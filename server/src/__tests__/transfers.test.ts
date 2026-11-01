@@ -49,6 +49,16 @@ describe('transfer detection (M6)', () => {
     expect(unlinked.length).toBeGreaterThanOrEqual(2);
   });
 
+  it('leaves a tie between destination candidates unlinked', () => {
+    const rId = insertTx(repayId, '2024-08-01', 'BPAY VISA', -80);
+    insertTx(cardId, '2024-08-01', 'Payment received', 80);
+    insertTx(cardId, '2024-08-01', 'Payment received again', 80);
+    linkTransfers();
+    const r = getDb().select().from(schema.transactions).where(eq(schema.transactions.id, rId)).get();
+    expect(r?.isTransfer).toBe(false);
+    expect(r?.linkedTransactionId).toBeNull();
+  });
+
   it('manual link + unlink works', () => {
     const a = insertTx(repayId, '2024-07-01', 'manual A', -50);
     const b = insertTx(cardId, '2024-07-02', 'manual B', 50);

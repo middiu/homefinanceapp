@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import { setupDb, getDb, schema, randomUUID } from './dbHelper.js';
+import express from 'express';
+import { setupDb, getDb, schema } from './dbHelper.js';
+import reportsRouter from '../routes/reports.js';
 import { uid, dedupHash } from '../utils.js';
-import { ownershipMap } from '../services/transactions.js';
+import { ownershipMap, queryTransactions } from '../services/transactions.js';
 import { matchRule } from '../services/rules.js';
 
 let emilioId: string;
@@ -59,6 +61,12 @@ describe('ownership split', () => {
     expect(Math.round((-200 * pct) / 100)).toBe(-200);
   });
 
+  it('sums shares when several members are selected on one account', () => {
+    const { rows } = queryTransactions({ memberId: [emilioId, partnerId] });
+    const joint = rows.find((r) => r.accountId === jointAcctId);
+    expect(joint?.shareAmount).toBe(-100);
+  });
+
   it('Emilio total attributed spend = 60% of joint + 100% of solo', () => {
     const own = ownershipMap();
     const jointShare = (-100 * (own.get(jointAcctId)!.get(emilioId) ?? 0)) / 100;
@@ -74,6 +82,22 @@ describe('ownership split', () => {
     const h2 = dedupHash(jointAcctId, '2026-07-01', -100, 'Something else');
     const exists2 = getDb().select().from(schema.transactions).all().some((t) => t.dedupHash === h2);
     expect(exists2).toBe(false);
+  });
+
+  it('weights income-expense by ownership percent', async () => {
+    const app = express();
+    app.use(reportsRouter);
+    const server = app.listen(0);
+    await new Promise((resolve) => server.once('listening', resolve));
+    const port = (server.address() as { port: number }).port;
+    try {
+      const url = `http://127.0.0.1:${port}/income-expense-by-category?memberId=${emilioId}&dateFrom=2026-07-01&dateTo=2026-07-31`;
+      const body = await (await fetch(url)).json();
+      // 60% of joint $100 + 100% of solo $200
+      expect(body.totals.expense).toBe(260);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
   });
 
   it('rule engine returns null without matching rules (no categories configured to match)', () => {

@@ -30,7 +30,7 @@ import type {
 export const api = createApi({
   reducerPath: 'api',
   baseQuery: fetchBaseQuery({ baseUrl: '/api', credentials: 'include' }),
-  tagTypes: ['Auth', 'Member', 'Account', 'Category', 'Rule', 'Transaction', 'ImportBatch', 'Mapping', 'Insight', 'Setting', 'Backup', 'Investment', 'Price', 'TestHistory', 'Budget'],
+  tagTypes: ['Auth', 'Member', 'Account', 'Category', 'Rule', 'Transaction', 'ImportBatch', 'Mapping', 'Insight', 'Setting', 'Backup', 'Investment', 'Price', 'TestHistory', 'Budget', 'Dashboard', 'Report'],
   endpoints: (b) => ({
     // ---- Auth ----
     login: b.mutation<LoginResponse, { username: string; password: string }>({
@@ -63,9 +63,9 @@ export const api = createApi({
 
     // ---- Accounts ----
     listAccounts: b.query<AccountDto[], void>({ query: () => '/accounts', providesTags: ['Account'] }),
-    createAccount: b.mutation<AccountDto, Partial<AccountDto>>({ query: (body) => ({ url: '/accounts', method: 'POST', body }), invalidatesTags: ['Account'] }),
-    updateAccount: b.mutation<AccountDto, { id: string; body: Partial<AccountDto> }>({ query: ({ id, body }) => ({ url: `/accounts/${id}`, method: 'PUT', body }), invalidatesTags: ['Account'] }),
-    deleteAccount: b.mutation<void, string>({ query: (id) => ({ url: `/accounts/${id}`, method: 'DELETE' }), invalidatesTags: ['Account'] }),
+    createAccount: b.mutation<AccountDto, Partial<AccountDto>>({ query: (body) => ({ url: '/accounts', method: 'POST', body }), invalidatesTags: ['Account', 'Dashboard'] }),
+    updateAccount: b.mutation<AccountDto, { id: string; body: Partial<AccountDto> }>({ query: ({ id, body }) => ({ url: `/accounts/${id}`, method: 'PUT', body }), invalidatesTags: ['Account', 'Dashboard', 'Report'] }),
+    deleteAccount: b.mutation<void, string>({ query: (id) => ({ url: `/accounts/${id}`, method: 'DELETE' }), invalidatesTags: ['Account', 'Dashboard', 'Report'] }),
 
     // ---- Categories ----
     listCategories: b.query<CategoryDto[], void>({ query: () => '/categories', providesTags: ['Category'] }),
@@ -88,23 +88,23 @@ export const api = createApi({
       query: (f) => ({ url: '/transactions', params: f }),
       providesTags: (r) => r ? [...r.items.map((t) => ({ type: 'Transaction' as const, id: t.id })), 'Transaction'] : ['Transaction'],
     }),
-    createTransaction: b.mutation<TransactionDto, any>({ query: (body) => ({ url: '/transactions', method: 'POST', body }), invalidatesTags: ['Transaction'] }),
-    updateTransaction: b.mutation<TransactionDto, { id: string; body: any }>({ query: ({ id, body }) => ({ url: `/transactions/${id}`, method: 'PUT', body }), invalidatesTags: ['Transaction'] }),
-    deleteTransaction: b.mutation<void, string>({ query: (id) => ({ url: `/transactions/${id}`, method: 'DELETE' }), invalidatesTags: ['Transaction'] }),
+    createTransaction: b.mutation<TransactionDto, any>({ query: (body) => ({ url: '/transactions', method: 'POST', body }), invalidatesTags: ['Transaction', 'Dashboard', 'Report'] }),
+    updateTransaction: b.mutation<TransactionDto, { id: string; body: any }>({ query: ({ id, body }) => ({ url: `/transactions/${id}`, method: 'PUT', body }), invalidatesTags: ['Transaction', 'Dashboard', 'Report'] }),
+    deleteTransaction: b.mutation<void, string>({ query: (id) => ({ url: `/transactions/${id}`, method: 'DELETE' }), invalidatesTags: ['Transaction', 'Dashboard', 'Report'] }),
     bulkCategorize: b.mutation<{ ok: true }, { ids: string[]; categoryId: string | null; source?: string }>({
       query: (body) => ({ url: '/transactions/bulk', method: 'POST', body }),
-      invalidatesTags: ['Transaction'],
+      invalidatesTags: ['Transaction', 'Dashboard', 'Report'],
     }),
     recategorize: b.mutation<{ jobId: string }, { ids?: string[]; useWebSearch?: boolean }>({
       query: (body) => ({ url: '/transactions/recategorize', method: 'POST', body }),
     }),
     deleteAllTransactions: b.mutation<{ ok: true }, void>({
       query: () => ({ url: '/transactions', method: 'DELETE', body: { confirm: 'DELETE' } }),
-      invalidatesTags: ['Transaction', 'ImportBatch'],
+      invalidatesTags: ['Transaction', 'ImportBatch', 'Dashboard', 'Report'],
     }),
-    markReviewed: b.mutation<{ ok: true }, { ids: string[] }>({ query: (body) => ({ url: '/transactions/review', method: 'POST', body }), invalidatesTags: ['Transaction'] }),
-    linkTransfer: b.mutation<{ ok: true }, { id: string; linkedTransactionId: string }>({ query: (body) => ({ url: `/transactions/${body.id}/link`, method: 'POST', body: { linkedTransactionId: body.linkedTransactionId } }), invalidatesTags: ['Transaction'] }),
-    unlinkTransfer: b.mutation<{ ok: true }, string>({ query: (id) => ({ url: `/transactions/${id}/unlink`, method: 'POST' }), invalidatesTags: ['Transaction'] }),
+    markReviewed: b.mutation<{ ok: true }, { ids: string[] }>({ query: (body) => ({ url: '/transactions/review', method: 'POST', body }), invalidatesTags: ['Transaction', 'Dashboard', 'Report'] }),
+    linkTransfer: b.mutation<{ ok: true }, { id: string; linkedTransactionId: string }>({ query: (body) => ({ url: `/transactions/${body.id}/link`, method: 'POST', body: { linkedTransactionId: body.linkedTransactionId } }), invalidatesTags: ['Transaction', 'Dashboard', 'Report'] }),
+    unlinkTransfer: b.mutation<{ ok: true }, string>({ query: (id) => ({ url: `/transactions/${id}/unlink`, method: 'POST' }), invalidatesTags: ['Transaction', 'Dashboard', 'Report'] }),
     suggestCategory: b.mutation<{ categoryId: string | null }, { description: string; amount: number }>({
       query: (body) => ({ url: '/transactions/suggest', method: 'POST', body }),
     }),
@@ -112,20 +112,20 @@ export const api = createApi({
     // ---- Imports ----
     uploadImport: b.mutation<any, FormData>({ query: (body) => ({ url: '/imports/upload', method: 'POST', body }) }),
     estimateAi: b.mutation<any, { rows: { description: string; amount: number }[] }>({ query: (body) => ({ url: '/imports/estimate-ai', method: 'POST', body }) }),
-    commitImport: b.mutation<any, any>({ query: (body) => ({ url: '/imports/commit', method: 'POST', body }), invalidatesTags: ['Transaction', 'ImportBatch'] }),
+    commitImport: b.mutation<any, any>({ query: (body) => ({ url: '/imports/commit', method: 'POST', body }), invalidatesTags: ['Transaction', 'ImportBatch', 'Dashboard', 'Report'] }),
     listImportBatches: b.query<ImportBatchDto[], void>({ query: () => '/imports/batches', providesTags: ['ImportBatch'] }),
-    deleteImportBatch: b.mutation<void, string>({ query: (id) => ({ url: `/imports/batches/${id}`, method: 'DELETE' }), invalidatesTags: ['Transaction', 'ImportBatch'] }),
+    deleteImportBatch: b.mutation<void, string>({ query: (id) => ({ url: `/imports/batches/${id}`, method: 'DELETE' }), invalidatesTags: ['Transaction', 'ImportBatch', 'Dashboard', 'Report'] }),
     clearImportHistory: b.mutation<{ deletedTransactions: number; deletedBatches: number }, void>({
       query: () => ({ url: '/imports/batches', method: 'DELETE', body: { confirm: 'DELETE' } }),
-      invalidatesTags: ['Transaction', 'ImportBatch'],
+      invalidatesTags: ['Transaction', 'ImportBatch', 'Dashboard', 'Report'],
     }),
     listMappings: b.query<ImportMappingDto[], void>({ query: () => '/imports/mappings', providesTags: ['Mapping'] }),
     createMapping: b.mutation<any, any>({ query: (body) => ({ url: '/imports/mappings', method: 'POST', body }), invalidatesTags: ['Mapping'] }),
     deleteMapping: b.mutation<void, string>({ query: (id) => ({ url: `/imports/mappings/${id}`, method: 'DELETE' }), invalidatesTags: ['Mapping'] }),
 
     // ---- Dashboards ----
-    getOverview: b.query<any, Partial<DashboardScope>>({ query: (s) => ({ url: '/dashboards/overview', params: s }) }),
-    getDeepDive: b.query<any, Partial<DashboardScope>>({ query: (s) => ({ url: '/dashboards/deepdive', params: s }) }),
+    getOverview: b.query<any, Partial<DashboardScope>>({ query: (s) => ({ url: '/dashboards/overview', params: s }), providesTags: ['Dashboard', 'Insight'] }),
+    getDeepDive: b.query<any, Partial<DashboardScope>>({ query: (s) => ({ url: '/dashboards/deepdive', params: s }), providesTags: ['Dashboard'] }),
 
     // ---- Investments ----
     getPortfolio: b.query<PortfolioSummary, { accountId?: string } | void>({ query: (arg) => ({ url: '/investments/portfolio', params: arg ?? {} }), providesTags: ['Investment', 'Price'] }),
@@ -138,12 +138,15 @@ export const api = createApi({
     // ---- Reports ----
     getIncomeExpenseReport: b.query<CategoryReport, { preset?: string; dateFrom?: string; dateTo?: string; accountId?: string; memberId?: string }>({
       query: (p) => ({ url: '/reports/income-expense-by-category', params: p }),
+      providesTags: ['Report'],
     }),
     getCategoryAnalytics: b.query<CategoryAnalytics, { preset?: string; dateFrom?: string; dateTo?: string; accountId?: string; memberId?: string; categoryId?: string[]; includeIncome?: boolean }>({
       query: (p) => ({ url: '/reports/category-analytics', params: { ...p, categoryId: p.categoryId?.join(',') } }),
+      providesTags: ['Report'],
     }),
     getBudgetReport: b.query<BudgetReport, { preset?: string; dateFrom?: string; dateTo?: string; accountId?: string; memberId?: string; categoryId?: string[] }>({
       query: (p) => ({ url: '/reports/budget', params: { ...p, categoryId: p.categoryId?.join(',') } }),
+      providesTags: ['Report'],
     }),
     generateForecastReport: b.mutation<ForecastReport, { accountId?: string[]; memberId?: string[] }>({ query: (body) => ({ url: '/ai/forecast-report', method: 'POST', body }) }),
     generateBudgets: b.mutation<{ jobId: string }, void>({ query: () => ({ url: '/ai/budgets/suggest', method: 'POST' }) }),
@@ -152,14 +155,14 @@ export const api = createApi({
     listBudgets: b.query<BudgetDto[], void>({ query: () => '/budgets', providesTags: ['Budget'] }),
     upsertBudget: b.mutation<BudgetDto, { categoryId: string; monthlyAmount: number }>({
       query: ({ categoryId, monthlyAmount }) => ({ url: `/budgets/${categoryId}`, method: 'PUT', body: { monthlyAmount } }),
-      invalidatesTags: ['Budget'],
+      invalidatesTags: ['Budget', 'Report'],
     }),
-    deleteBudget: b.mutation<void, string>({ query: (categoryId) => ({ url: `/budgets/${categoryId}`, method: 'DELETE' }), invalidatesTags: ['Budget'] }),
+    deleteBudget: b.mutation<void, string>({ query: (categoryId) => ({ url: `/budgets/${categoryId}`, method: 'DELETE' }), invalidatesTags: ['Budget', 'Report'] }),
 
     // ---- AI ----
     aiStatus: b.query<{ enabled: boolean }, void>({ query: () => '/ai/status' }),
     generateInsight: b.mutation<{ jobId: string }, { scope?: string }>({ query: (body) => ({ url: '/ai/insight', method: 'POST', body }) }),
-    latestInsight: b.query<any, string>({ query: (scope) => ({ url: '/ai/insight/latest', params: { scope } }) }),
+    latestInsight: b.query<any, string>({ query: (scope) => ({ url: '/ai/insight/latest', params: { scope } }), providesTags: ['Insight'] }),
     generateForecast: b.mutation<any, { scope?: string }>({ query: (body) => ({ url: '/ai/forecast', method: 'POST', body }) }),
     listAnomalies: b.query<AnomalyDto[], { accountId?: string }>({ query: (p) => ({ url: '/ai/anomalies', params: p }) }),
     listSubscriptions: b.query<SubscriptionDto[], { accountId?: string }>({ query: (p) => ({ url: '/ai/subscriptions', params: p }) }),

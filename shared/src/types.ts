@@ -36,6 +36,8 @@ export interface AccountDto {
   creditLimit: number | null;
   statementClosingDay: number | null;
   paymentDueDay: number | null;
+  /** Current balance (opening + transactions). Set on the accounts list. */
+  balance?: number;
 }
 
 export interface CategoryDto {

@@ -6,7 +6,7 @@ import { Sparkles, AlertTriangle } from 'lucide-react';
 import { useGenerateForecastReportMutation } from '@/app/api';
 import { PageHeader, EmptyState } from '@/components/common';
 import { JobProgressModal } from '@/components/JobProgressModal';
-import { formatAUD, monthLabel } from '@/lib/utils';
+import { formatAUD, monthLabel, apiErrorMessage } from '@/lib/utils';
 
 export default function ReportForecastPage() {
   const [report, setReport] = useState<any>(null);
@@ -17,10 +17,10 @@ export default function ReportForecastPage() {
   async function generate() {
     setErr('');
     try {
-      const r: any = await gen({});
-      if (r.error) setErr(r.error);
-      else setJobId(r.data?.jobId ?? null);
-    } catch (e: any) { setErr(e?.data?.error ?? e?.message ?? 'forecast failed'); }
+      const r = await gen({}).unwrap() as { jobId?: string };
+      if (!r.jobId) setErr('forecast failed');
+      else setJobId(r.jobId);
+    } catch (e: unknown) { setErr(apiErrorMessage(e, 'forecast failed')); }
   }
 
   const chart = report ? [...report.history.map((h: any) => ({ month: monthLabel(h.month), actual: h.net, forecast: null, income: h.income, expense: h.expense })), ...report.forecast.map((f: any) => ({ month: monthLabel(f.month), actual: null, forecast: f.net, cumulative: f.cumulative }))] : [];

@@ -26,14 +26,14 @@ import { PageHeader, EmptyState, Money } from '@/components/common';
 import { CategorySelect, SourceBadge } from '@/components/CategorySelect';
 import { JobProgressModal } from '@/components/JobProgressModal';
 import { Badge } from '@/components/ui/badge';
-import { formatAUD, formatDate } from '@/lib/utils';
+import { formatAUD, formatDate, localISODate, apiErrorMessage } from '@/lib/utils';
 
 const PAGE_SIZE = 50;
 
 export default function TransactionsPage() {
   const [filters, setFilters] = useState<any>({ page: 1, pageSize: PAGE_SIZE, sort: 'date:desc' });
   const [draft, setDraft] = useState<any>({ page: 1, pageSize: PAGE_SIZE, sort: 'date:desc' });
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   // Hydrate filters from URL (drill-down links from Category analytics etc.).
   useEffect(() => {
     const s = new URLSearchParams(searchParams);
@@ -66,7 +66,7 @@ export default function TransactionsPage() {
   const { data: categories } = useListCategoriesQuery();
   const catTypeById = useMemo(() => new Map((categories ?? []).map((c) => [c.id, c.type])), [categories]);
   const { data: members } = useListMembersQuery();
-  const { data, isLoading } = useListTransactionsQuery(filters);
+  const { data, isLoading, isError, error } = useListTransactionsQuery(filters);
   const { data: aiStatus } = useAiStatusQuery();
   const [updateTx] = useUpdateTransactionMutation();
   const [deleteTx] = useDeleteTransactionMutation();
@@ -114,6 +114,7 @@ export default function TransactionsPage() {
     const d = { page: 1, pageSize: PAGE_SIZE, sort: 'date:desc' };
     setDraft(d);
     setFilters({ ...d });
+    if ([...searchParams.keys()].length) setSearchParams({}, { replace: true });
   }
 
   function toggle(id: string) {
@@ -224,6 +225,8 @@ export default function TransactionsPage() {
         <TBody>
           {isLoading ? (
             <TR><TD colSpan={8}><div className="py-8 text-center text-muted-foreground">Loading…</div></TD></TR>
+          ) : isError ? (
+            <TR><TD colSpan={8}><EmptyState message={apiErrorMessage(error, 'Could not load transactions')} /></TD></TR>
           ) : rows.length === 0 ? (
             <TR><TD colSpan={8}><EmptyState message="No transactions match. Import a bank export to get started." /></TD></TR>
           ) : rows.map((t: any) => (
@@ -315,7 +318,7 @@ export default function TransactionsPage() {
       <JobProgressModal
         jobId={recatJobId}
         title="Re-categorizing"
-        onDone={() => dispatch(api.util.invalidateTags(['Transaction', 'Rule']))}
+        onDone={() => dispatch(api.util.invalidateTags(['Transaction', 'Rule', 'Dashboard', 'Report']))}
         onClose={() => setRecatJobId(null)}
       />
     </div>
@@ -324,7 +327,7 @@ export default function TransactionsPage() {
 
 function AddTransactionDialog({ onClose, onCreate }: { onClose: () => void; onCreate: (body: any) => void }) {
   const { data: accounts } = useListAccountsQuery();
-  const [form, setForm] = useState({ accountId: '', date: new Date().toISOString().slice(0, 10), time: '', description: '', amount: '', categoryId: '' });
+  const [form, setForm] = useState({ accountId: '', date: localISODate(), time: '', description: '', amount: '', categoryId: '' });
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/60" onClick={onClose} />

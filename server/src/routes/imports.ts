@@ -10,6 +10,7 @@ import { sum } from 'drizzle-orm';
 import { matchRule } from '../services/rules.js';
 import { categorizeBatch, estimateAiNeed, isAutoCategorizeEnabled } from '../services/ai.js';
 import { linkTransfers } from '../services/transfers.js';
+import { undoImportBatch } from '../services/transactions.js';
 import { createJob, finishJob, failJob } from '../services/jobs.js';
 import type { ImportBatchDto, ImportFileFormat, ImportMappingDto } from '@homefinance/shared';
 
@@ -301,10 +302,9 @@ router.delete('/batches', (req, res) => {
   res.json({ deletedTransactions, deletedBatches });
 });
 
-// Undo an import batch: delete all transactions created in it.
+// Undo an import batch: delete its transactions, AI log rows, and partner links.
 router.delete('/batches/:id', (req, res) => {
-  db().delete(schema.transactions).where(eq(schema.transactions.importBatchId, req.params.id)).run();
-  db().delete(schema.importBatches).where(eq(schema.importBatches.id, req.params.id)).run();
+  undoImportBatch(req.params.id);
   res.status(204).end();
 });
 
