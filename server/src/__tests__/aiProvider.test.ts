@@ -9,6 +9,7 @@ import {
   buildGrokChatBody,
   buildGrokWebSearchBody,
   cursorModelIds,
+  extractGrokStreamText,
   extractGrokText,
   filterGrokModelIds,
   interpretCursorRun,
@@ -18,6 +19,7 @@ import {
   runProviderChat,
   testConnection,
 } from '../services/aiProvider.js';
+import { pinGrokClientVersionForTests, resetSubscriptionStateForTests } from '../services/aiSubscription.js';
 
 beforeAll(() => {
   setupDb();
@@ -26,6 +28,7 @@ beforeAll(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  resetSubscriptionStateForTests();
 });
 
 function putSetting(key: string, value: string) {
@@ -74,6 +77,12 @@ describe('model ids and response parsers', () => {
 
   it('reads Cursor catalogue ids', () => {
     expect(cursorModelIds({ items: [{ id: 'grok-4.7' }, { id: 'composer-2.5' }, { id: 'bad id' }] })).toEqual(['grok-4.7', 'composer-2.5']);
+  });
+
+  it('reads Grok event-stream deltas and a completed response', () => {
+    expect(extractGrokStreamText('data: {"delta":"Hel"}\n\ndata: {"delta":"lo"}\n\n')).toBe('Hello');
+    expect(extractGrokStreamText('data: {"delta":"Hel"}\n\ndata: {"response":{"output_text":"Hello"}}\n\n')).toBe('Hello');
+    expect(extractGrokStreamText('{"output_text":"Hello"}')).toBe('Hello');
   });
 
   it('extracts text from Responses and Chat Completions payloads', () => {
@@ -195,6 +204,7 @@ describe('pinned provider calls', () => {
       expect(url).toBe('https://api.x.ai/v1/responses');
       expect(init.redirect).toBe('error');
       expect((init.headers as Record<string, string>).Authorization).toBe(`Bearer ${secret}`);
+      expect((init.headers as Record<string, string>)['X-XAI-Token-Auth']).toBeUndefined();
       const body = JSON.parse(String(init.body));
       expect(body.model).toBe('grok-4.7');
       expect(body.tools).toBeUndefined();
@@ -300,6 +310,31 @@ describe('pinned provider calls', () => {
     expect(result.ok).toBe(true);
     expect(result.models).toEqual(['grok-4.7']);
     expect(result.message).not.toContain('xai-secret-value-222');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends a Grok subscription bearer only to the subscription proxy', async () => {
+    pinGrokClientVersionForTests('1.0.70');
+    const secret = 'grok-access-value-999';
+    const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+      expect(String(url)).toBe('https://cli-chat-proxy.grok.com/v1/responses');
+      const headers = init.headers as Record<string, string>;
+      expect(headers.Authorization).toBe(`Bearer ${secret}`);
+      expect(headers['X-XAI-Token-Auth']).toBe('xai-grok-cli');
+      expect(headers['x-grok-client-identifier']).toBe('grok-shell');
+      expect(headers['x-grok-client-version']).toBe('1.0.70');
+      expect(headers['x-grok-model-override']).toBe('grok-4.7');
+      const body = JSON.parse(String(init.body));
+      expect(body.stream).toBe(true);
+      expect(body.tools).toBeUndefined();
+      return new Response('data: {"delta":"Hi"}\n\n', { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const text = await runProviderChat(
+      { provider: 'grok', baseUrl: 'https://evil.example', apiKey: secret, model: 'grok-4.7', grokVia: 'subscription' },
+      'Say hi',
+    );
+    expect(text).toBe('Hi');
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

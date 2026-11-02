@@ -10,7 +10,7 @@ A self-hosted, private web application for tracking household finances. Import b
 
 - **Frontend:** React 18, TypeScript, Redux Toolkit (RTK Query), React Router, Tailwind CSS, shadcn/ui-style components, Recharts
 - **Backend:** Node.js + Express, TypeScript, Drizzle ORM, SQLite (better-sqlite3)
-- **AI:** server-side provider switch — Ollama (default), Grok via the xAI API, or a Cursor catalogue model. API keys stay on the server. Grok and Cursor hosts are pinned.
+- **AI:** server-side provider switch — Ollama (default), Grok (xAI API key or a SuperGrok / X Premium device-code sign-in), or Cursor (API key or Cursor account sign-in). Keys and subscription tokens stay on the server. Hosts are pinned.
 - **Scheduler:** node-cron (weekly AI digest + daily backup)
 - **Tests:** Vitest
 - **Container runtime:** Podman (Docker-compatible; `docker compose` works too)

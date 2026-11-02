@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useDispatch } from 'react-redux';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -10,16 +10,19 @@ import { Sparkles, Zap, Activity, AlertTriangle, CheckCircle2, XCircle } from 'l
 import {
   useGetAiConfigQuery, useUpdateAiConfigMutation, useAiStatusQuery, useGenerateInsightMutation, useLatestInsightQuery,
   useListCloudModelsQuery, useTestConnectionMutation, useTestHistoryQuery, api,
+  useGetGrokSubscriptionQuery, useStartGrokSubscriptionMutation, useCancelGrokSubscriptionMutation, useDisconnectGrokSubscriptionMutation,
+  useGetCursorSubscriptionQuery, useStartCursorSubscriptionMutation, useCancelCursorSubscriptionMutation, useDisconnectCursorSubscriptionMutation,
 } from '@/app/api';
 import { PageHeader } from '@/components/common';
 import { JobProgressModal } from '@/components/JobProgressModal';
 import { formatDate } from '@/lib/utils';
-import type { AiConfigDto, AiConfigUpdate, AiConnectionTestResult, AiProviderId } from '@homefinance/shared';
+import type { AiConfigDto, AiConfigUpdate, AiConnectionTestResult, AiProviderId, AiSubscriptionView } from '@homefinance/shared';
 import {
   AI_PROVIDER_DEFAULT_MODEL,
   AI_PROVIDER_ENDPOINTS,
   CURSOR_MODELS,
   GROK_MODELS,
+  GROK_SUBSCRIPTION_ENDPOINT,
   OLLAMA_CLOUD_MODELS,
   aiModelFitsProvider,
 } from '@homefinance/shared';
@@ -36,6 +39,106 @@ function suggestedModels(provider: AiProviderId): string[] {
   if (provider === 'grok') return GROK_MODELS;
   if (provider === 'cursor') return CURSOR_MODELS;
   return OLLAMA_CLOUD_MODELS;
+}
+
+function SubscriptionSignIn({ provider }: { provider: 'grok' | 'cursor' }) {
+  const dispatch = useDispatch();
+  const [watchGrok, setWatchGrok] = useState(false);
+  const [watchCursor, setWatchCursor] = useState(false);
+  const grok = useGetGrokSubscriptionQuery(undefined, { skip: provider !== 'grok', pollingInterval: watchGrok ? 2000 : 0 });
+  const cursor = useGetCursorSubscriptionQuery(undefined, { skip: provider !== 'cursor', pollingInterval: watchCursor ? 2000 : 0 });
+  const [startGrok, grokStart] = useStartGrokSubscriptionMutation();
+  const [cancelGrok, grokCancel] = useCancelGrokSubscriptionMutation();
+  const [disconnectGrok, grokDisconnect] = useDisconnectGrokSubscriptionMutation();
+  const [startCursor, cursorStart] = useStartCursorSubscriptionMutation();
+  const [cancelCursor, cursorCancel] = useCancelCursorSubscriptionMutation();
+  const [disconnectCursor, cursorDisconnect] = useDisconnectCursorSubscriptionMutation();
+  const view: AiSubscriptionView | undefined = provider === 'grok' ? grok.data : cursor.data;
+  const [actionErr, setActionErr] = useState('');
+  const seen = useRef<string | undefined>(undefined);
+  const busy = provider === 'grok'
+    ? grokStart.isLoading || grokCancel.isLoading || grokDisconnect.isLoading
+    : cursorStart.isLoading || cursorCancel.isLoading || cursorDisconnect.isLoading;
+
+  useEffect(() => {
+    if (provider === 'grok') setWatchGrok(grok.data?.status === 'pending');
+    if (provider === 'cursor') setWatchCursor(cursor.data?.status === 'pending');
+  }, [provider, grok.data?.status, cursor.data?.status]);
+
+  useEffect(() => {
+    const status = view?.status;
+    if (seen.current && seen.current !== 'connected' && status === 'connected') {
+      dispatch(api.util.invalidateTags(['Setting']));
+    }
+    seen.current = status;
+  }, [dispatch, view?.status]);
+
+  async function start() {
+    setActionErr('');
+    try {
+      if (provider === 'grok') {
+        setWatchGrok(true);
+        await startGrok().unwrap();
+      } else {
+        setWatchCursor(true);
+        await startCursor().unwrap();
+      }
+    } catch (e: any) {
+      if (provider === 'grok') setWatchGrok(false);
+      else setWatchCursor(false);
+      setActionErr(e?.data?.message ?? e?.data?.error ?? 'Could not start sign-in');
+    }
+  }
+
+  const link = provider === 'grok'
+    ? (view?.verificationUriComplete || view?.verificationUri)
+    : view?.loginUrl;
+
+  return (
+    <div className="rounded-md border border-border p-3 space-y-2">
+      <div className="flex items-center gap-2">
+        <p className="text-sm font-medium">{provider === 'grok' ? 'Grok subscription' : 'Cursor account'}</p>
+        {view?.status === 'connected' && <Badge tone="success">Signed in</Badge>}
+        {view?.status === 'pending' && <Badge tone="warning">Waiting for you</Badge>}
+      </div>
+      <p className="text-xs text-muted-foreground">
+        {provider === 'grok'
+          ? 'Sign in with a SuperGrok or X Premium subscription. The tokens stay on this server, and Grok requests use that subscription while it is connected. Some plans are refused by xAI; an API key from console.x.ai still works and calls api.x.ai.'
+          : 'Sign in with your Cursor account. HomeFinance stores only a user API key minted for this app, valid for about 90 days, billed to your Cursor subscription. Disconnect removes it here. Revoke it in the Cursor dashboard to invalidate it early.'}
+      </p>
+      {view?.status === 'connected' && (
+        <p className="text-xs text-muted-foreground">
+          {view.email ? `${view.email}. ` : ''}
+          {view.expiresAt ? `Access refreshes or expires ${new Date(view.expiresAt).toLocaleString('en-AU')}.` : 'Connected.'}
+        </p>
+      )}
+      {view?.status === 'pending' && provider === 'grok' && view.userCode && (
+        <p className="font-mono text-lg tracking-widest">{view.userCode}</p>
+      )}
+      {view?.status === 'pending' && link && (
+        <a className="text-sm text-primary underline" href={link} target="_blank" rel="noreferrer">
+          {provider === 'grok' ? 'Open the xAI sign-in page' : 'Open the Cursor sign-in page'}
+        </a>
+      )}
+      {view?.message && <p className="text-xs text-amber-500">{view.message}</p>}
+      {actionErr && <p className="text-xs text-red-400">{actionErr}</p>}
+      <div className="flex gap-2">
+        {view?.status === 'pending' ? (
+          <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => { void (provider === 'grok' ? cancelGrok() : cancelCursor()); }}>
+            Cancel sign-in
+          </Button>
+        ) : view?.status === 'connected' ? (
+          <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => { void (provider === 'grok' ? disconnectGrok() : disconnectCursor()); }}>
+            Disconnect
+          </Button>
+        ) : (
+          <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => { void start(); }}>
+            {busy ? 'Starting…' : provider === 'grok' ? 'Sign in with Grok' : 'Sign in with Cursor'}
+          </Button>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export default function AiSettingsPage() {
@@ -112,7 +215,7 @@ export default function AiSettingsPage() {
 
   return (
     <div>
-      <PageHeader title="AI & Insights" subtitle="Choose Ollama, Grok, or a Cursor model. API keys stay on the server." />
+      <PageHeader title="AI & Insights" subtitle="Choose Ollama, Grok, or a Cursor model. Keys and subscription sign-in stay on the server." />
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
@@ -145,14 +248,15 @@ export default function AiSettingsPage() {
             ) : (
               <div>
                 <Label>Endpoint</Label>
-                <Input value={AI_PROVIDER_ENDPOINTS[provider]} readOnly />
+                <Input value={provider === 'grok' && data?.subscription?.grok.connected ? GROK_SUBSCRIPTION_ENDPOINT : AI_PROVIDER_ENDPOINTS[provider]} readOnly />
                 <p className="mt-1 text-xs text-muted-foreground">
                   {provider === 'grok'
-                    ? 'Grok calls are pinned to api.x.ai. A settings change cannot redirect the key.'
+                    ? 'A Grok subscription calls cli-chat-proxy.grok.com. An API key calls api.x.ai. A settings change cannot redirect either credential.'
                     : 'Cursor calls are pinned to api.cursor.com. Each reply is a no-repo plan-mode agent with no repository, MCP, or environment variables, and the agent is deleted after the reply.'}
                 </p>
               </div>
             )}
+            {(provider === 'grok' || provider === 'cursor') && <SubscriptionSignIn provider={provider} />}
             <div>
               <Label htmlFor="model">Model</Label>
               {modelChoices.length > 0 ? (
@@ -176,7 +280,11 @@ export default function AiSettingsPage() {
                 onChange={(e) => setForm({ ...(cfg as AiConfigDto), apiKey: e.target.value })}
                 placeholder={hasKey ? '•••••• stored (enter to replace)' : provider === 'grok' ? 'xAI API key' : provider === 'cursor' ? 'Cursor API key' : 'Ollama API key'}
               />
-              <p className="mt-1 text-xs text-muted-foreground">Each provider keeps its own key. Saving Grok does not overwrite the Ollama or Cursor key.</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Each provider keeps its own key.
+                {provider === 'grok' && ' While a Grok subscription is connected, requests use that sign-in. The API key is used after you disconnect.'}
+                {provider === 'cursor' && ' Signing in with Cursor stores a subscription key here. Pasting a key replaces that sign-in.'}
+              </p>
             </div>
             <div className="flex items-center gap-2">
               <input type="checkbox" id="autoCat" checked={cfg?.autoCategorize ?? false} onChange={(e) => setForm({ ...(cfg as AiConfigDto), autoCategorize: e.target.checked })} />
@@ -268,7 +376,7 @@ export default function AiSettingsPage() {
           <CardContent className="pt-4 text-sm text-muted-foreground">
             <p className="font-medium text-foreground">Privacy</p>
             <p>Categorization sends one sanitized merchant description and the amount. Insights and forecasts send category totals and projection figures only. Account numbers, balances, and raw exports stay on this server. Transfers are skipped.</p>
-            {provider === 'grok' && <p className="mt-2">Grok uses the xAI Responses API over HTTPS. Web lookup, when you ask for it, is xAI web search with image search turned off.</p>}
+            {provider === 'grok' && <p className="mt-2">Grok subscription sign-in uses xAI's device login and the Grok subscription proxy. An API key uses the xAI Responses API at api.x.ai. Web lookup, when you ask for it, is xAI web search with image search turned off.</p>}
             {provider === 'cursor' && <p className="mt-2">Cursor has no stateless chat API. A reply runs as a plan-mode agent with no repository access, then that agent is deleted. The prompt still transits Cursor until deletion finishes, and a reply can take a minute or two. Prefer Grok when you want a direct inference call.</p>}
             <p className="mt-2 font-medium text-foreground">Auto-categorize</p>
             <p>When enabled, uncategorized imported transactions are batched (25 at a time). AI categories are saved with a "needs review" flag, and matching rules are created so later imports can skip the model.</p>

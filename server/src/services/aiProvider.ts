@@ -5,11 +5,20 @@ import {
   AI_PROVIDER_ENDPOINTS,
   CURSOR_MODELS,
   GROK_MODELS,
+  GROK_SUBSCRIPTION_ENDPOINT,
   OLLAMA_CLOUD_MODELS,
   aiModelFitsProvider,
   type AiProviderId,
 } from '@homefinance/shared';
 import type { AiConfigDto, AiConfigUpdate, AiConnectionTestResult } from '@homefinance/shared';
+import {
+  cursorSubscriptionSummary,
+  getGrokAccessToken,
+  grokProxyHeaders,
+  grokSubscriptionSummary,
+  hasGrokSubscription,
+  noteCursorApiKeyReplaced,
+} from './aiSubscription.js';
 import { config } from '../config.js';
 import { getDb, schema } from '../db/index.js';
 import { uid } from '../utils.js';
@@ -50,6 +59,8 @@ interface ProviderTarget {
   baseUrl: string;
   apiKey: string;
   model: string;
+  /** Subscription calls go to the Grok CLI proxy. API-key calls stay on api.x.ai. */
+  grokVia?: 'subscription' | 'api_key';
 }
 
 export interface AiRuntime extends ProviderTarget {
@@ -212,21 +223,29 @@ export function loadAiRuntime(): AiRuntime {
 export function readAiConfig(): AiConfigDto {
   const rt = loadAiRuntime();
   const ollamaBase = getSetting('ai.baseUrl') || config.ai.baseUrl;
-  const hasApiKey = !!rt.apiKey;
+  const subscription = {
+    grok: grokSubscriptionSummary(),
+    cursor: cursorSubscriptionSummary(),
+  };
+  const credential = !!rt.apiKey || (rt.provider === 'grok' && subscription.grok.connected);
+  const endpoint = rt.provider === 'grok' && subscription.grok.connected
+    ? GROK_SUBSCRIPTION_ENDPOINT
+    : rt.baseUrl;
   return {
     provider: rt.provider,
     enabled: rt.enabled,
     baseUrl: ollamaBase,
-    endpoint: rt.baseUrl,
+    endpoint,
     model: rt.model,
-    hasApiKey,
+    hasApiKey: credential,
     keysConfigured: {
       ollama: !!rt.keys.ollama,
       grok: !!rt.keys.grok,
       cursor: !!rt.keys.cursor,
     },
+    subscription,
     digestCron: getSetting('ai.digestCron') || config.ai.digestCron,
-    autoCategorize: getSetting('ai.autoCategorize') !== null ? getSetting('ai.autoCategorize') === 'true' : hasApiKey,
+    autoCategorize: getSetting('ai.autoCategorize') !== null ? getSetting('ai.autoCategorize') === 'true' : credential,
   };
 }
 
@@ -259,6 +278,7 @@ export function applyAiConfig(patch: AiConfigUpdate): void {
     setSetting('ai.model', replace ? AI_PROVIDER_DEFAULT_MODEL[next] : candidate);
   }
   if (patch.apiKey !== undefined) {
+    if (next === 'cursor' && patch.apiKey !== dbKey('cursor')) noteCursorApiKeyReplaced();
     setSetting(`ai.apiKey.${next}`, patch.apiKey);
     if (next === 'ollama') setSetting('ai.apiKey', patch.apiKey);
   }
@@ -268,7 +288,7 @@ export function applyAiConfig(patch: AiConfigUpdate): void {
 
 export function isAiEnabled(): boolean {
   const rt = loadAiRuntime();
-  return rt.enabled && !!rt.apiKey;
+  return rt.enabled && (!!rt.apiKey || (rt.provider === 'grok' && hasGrokSubscription()));
 }
 
 export function isAutoCategorizeEnabled(): boolean {
@@ -331,6 +351,38 @@ export function extractGrokText(data: unknown): string {
   return '';
 }
 
+/** Text from a Grok Responses body, including an event-stream of deltas. */
+export function extractGrokStreamText(body: string): string {
+  const trimmed = (body || '').trim();
+  if (!trimmed) return '';
+  if (trimmed.startsWith('{')) {
+    try {
+      return extractGrokText(JSON.parse(trimmed));
+    } catch {
+      return '';
+    }
+  }
+  let deltas = '';
+  let completed = '';
+  for (const block of trimmed.split(/\n\n+/)) {
+    const data = block
+      .split('\n')
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice(5).trim())
+      .join('');
+    if (!data || data === '[DONE]') continue;
+    try {
+      const json = JSON.parse(data) as { delta?: unknown; response?: unknown };
+      if (typeof json.delta === 'string') deltas += json.delta;
+      const full = extractGrokText(json.response ?? json);
+      if (full) completed = full;
+    } catch {
+      /* skip a non-json event */
+    }
+  }
+  return (completed || deltas).trim();
+}
+
 export function buildGrokChatBody(model: string, prompt: string, system?: string) {
   return {
     model: requireModelId(model),
@@ -387,10 +439,20 @@ function assertPromptSize(text: string) {
   }
 }
 
-function assertPinnedUrl(url: string) {
+function assertPinnedUrl(url: string, hosts: readonly string[] = ['api.x.ai', 'api.cursor.com']) {
   const u = new URL(url);
-  const allowed = u.protocol === 'https:' && (u.hostname === 'api.x.ai' || u.hostname === 'api.cursor.com');
+  const allowed = u.protocol === 'https:' && hosts.includes(u.hostname) && !u.username && !u.password;
   if (!allowed) throw new AiConfigError('Refusing to call an unexpected provider host');
+}
+
+function subscriptionHint(status: number, message: string): string {
+  if (status === 426 || /outdated/i.test(message)) {
+    return `${message} xAI rejected the Grok client version. An API key from console.x.ai still works.`;
+  }
+  if (status === 402 || status === 403) {
+    return `${message} This Grok plan may not include subscription API access. An API key from console.x.ai still works.`;
+  }
+  return message;
 }
 
 function errorMessage(parsed: unknown): string {
@@ -404,8 +466,16 @@ function errorMessage(parsed: unknown): string {
   return '';
 }
 
-async function pinnedRequest(url: string, apiKey: string, method: string, body: unknown | undefined, timeoutMs: number): Promise<unknown> {
-  assertPinnedUrl(url);
+async function pinnedRequest(
+  url: string,
+  apiKey: string,
+  method: string,
+  body: unknown | undefined,
+  timeoutMs: number,
+  hosts?: readonly string[],
+  extraHeaders?: Record<string, string>,
+): Promise<unknown> {
+  assertPinnedUrl(url, hosts);
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
@@ -418,6 +488,7 @@ async function pinnedRequest(url: string, apiKey: string, method: string, body: 
         Authorization: `Bearer ${apiKey}`,
         Accept: 'application/json',
         ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+        ...(extraHeaders ?? {}),
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
@@ -426,8 +497,9 @@ async function pinnedRequest(url: string, apiKey: string, method: string, body: 
     const buf = await res.arrayBuffer();
     if (buf.byteLength > MAX_RESPONSE_BYTES) throw new AiHttpError('Provider response too large', res.status);
     const text = new TextDecoder().decode(buf);
+    const streamed = (res.headers.get('content-type') || '').includes('event-stream') || text.trimStart().startsWith('data:');
     let parsed: unknown = null;
-    if (text) {
+    if (text && !streamed) {
       try {
         parsed = JSON.parse(text);
       } catch {
@@ -435,10 +507,11 @@ async function pinnedRequest(url: string, apiKey: string, method: string, body: 
       }
     }
     if (!res.ok) {
-      const msg = redactSecrets(errorMessage(parsed) || `HTTP ${res.status}`, apiKey);
-      throw new AiHttpError(msg, res.status);
+      const msg = redactSecrets(errorMessage(parsed) || (streamed ? text.slice(0, 300) : '') || `HTTP ${res.status}`, apiKey);
+      const hinted = hosts?.includes('cli-chat-proxy.grok.com') ? subscriptionHint(res.status, msg) : msg;
+      throw new AiHttpError(hinted, res.status);
     }
-    return parsed;
+    return streamed ? text : parsed;
   } catch (e) {
     if (e instanceof AiHttpError || e instanceof AiConfigError) throw e;
     const aborted = (e as Error).name === 'AbortError';
@@ -508,6 +581,28 @@ async function ollamaModelIds(baseUrl: string, apiKey: string): Promise<string[]
 
 async function listModels(target: ProviderTarget): Promise<string[]> {
   if (target.provider === 'ollama') return ollamaModelIds(target.baseUrl, target.apiKey);
+  if (target.provider === 'grok' && target.grokVia === 'subscription') {
+    try {
+      const headerModel = isSafeModelId(target.model) ? target.model : AI_PROVIDER_DEFAULT_MODEL.grok;
+      const headers = await grokProxyHeaders(headerModel, target.apiKey);
+      delete headers['Content-Type'];
+      headers.Accept = 'application/json';
+      const data = await pinnedRequest(
+        `${GROK_SUBSCRIPTION_ENDPOINT}/v1/models`,
+        target.apiKey,
+        'GET',
+        undefined,
+        20_000,
+        ['cli-chat-proxy.grok.com'],
+        headers,
+      );
+      const rows = (data as { data?: { id?: string }[] } | null)?.data ?? [];
+      return filterGrokModelIds(rows.map((m) => m?.id || '').filter(Boolean));
+    } catch (e) {
+      if (e instanceof AiHttpError && (e.status === 404 || e.status === 405)) return [];
+      throw e;
+    }
+  }
   if (target.provider === 'grok') {
     const data = await pinnedRequest(`${AI_PROVIDER_ENDPOINTS.grok}/v1/models`, target.apiKey, 'GET', undefined, 20_000);
     const rows = (data as { data?: { id?: string }[] } | null)?.data ?? [];
@@ -535,6 +630,23 @@ async function grokChat(target: ProviderTarget, prompt: string, system: string |
   const body = purpose === 'search' ? buildGrokWebSearchBody(target.model, prompt) : buildGrokChatBody(target.model, prompt, system);
   const data = await pinnedRequest(`${AI_PROVIDER_ENDPOINTS.grok}/v1/responses`, target.apiKey, 'POST', body, purpose === 'search' ? 90_000 : 120_000);
   return extractGrokText(data);
+}
+
+async function grokSubscriptionChat(target: ProviderTarget, prompt: string, system: string | undefined, purpose: 'chat' | 'search'): Promise<string> {
+  const model = requireModelId(target.model);
+  const payload = purpose === 'search' ? buildGrokWebSearchBody(model, prompt) : buildGrokChatBody(model, prompt, system);
+  const headers = await grokProxyHeaders(model, target.apiKey);
+  headers.Accept = 'application/json, text/event-stream';
+  const data = await pinnedRequest(
+    `${GROK_SUBSCRIPTION_ENDPOINT}/v1/responses`,
+    target.apiKey,
+    'POST',
+    { ...payload, stream: true },
+    purpose === 'search' ? 90_000 : 120_000,
+    ['cli-chat-proxy.grok.com'],
+    headers,
+  );
+  return typeof data === 'string' ? extractGrokStreamText(data) : extractGrokText(data);
 }
 
 function sleep(ms: number) {
@@ -605,6 +717,7 @@ export async function runProviderChat(target: ProviderTarget, prompt: string, sy
     if (purpose === 'search') return ollamaWebSearch(target, prompt);
     return ollamaChat(target, prompt, system);
   }
+  if (target.provider === 'grok' && target.grokVia === 'subscription') return grokSubscriptionChat(target, prompt, system, purpose);
   if (target.provider === 'grok') return grokChat(target, prompt, system, purpose);
   return cursorChat(target, prompt, system, purpose);
 }
@@ -615,8 +728,21 @@ async function ollamaWebSearch(target: ProviderTarget, query: string): Promise<s
   return (res.results || []).map((r) => r.content).join('\n').trim();
 }
 
-export async function chat(prompt: string, system?: string): Promise<string> {
+async function materializeRuntime(): Promise<AiRuntime> {
   const rt = loadAiRuntime();
+  if (rt.provider !== 'grok' || !hasGrokSubscription()) return rt;
+  const token = await getGrokAccessToken();
+  if (!token) return loadAiRuntime();
+  return {
+    ...rt,
+    apiKey: token,
+    baseUrl: GROK_SUBSCRIPTION_ENDPOINT,
+    grokVia: 'subscription',
+  };
+}
+
+export async function chat(prompt: string, system?: string): Promise<string> {
+  const rt = await materializeRuntime();
   if (!rt.enabled || !rt.apiKey) throw new Error('AI not configured (missing API key or disabled)');
   return runProviderChat(rt, prompt, system, 'chat');
 }
@@ -627,7 +753,7 @@ export function getProvider(): { chat(prompt: string, system?: string): Promise<
 
 /** Merchant lookup. The query must already be sanitized by the caller. */
 export async function aiWebSearch(query: string, maxResults = 3): Promise<string> {
-  const rt = loadAiRuntime();
+  const rt = await materializeRuntime();
   if (!rt.enabled || !rt.apiKey) return '';
   try {
     if (rt.provider === 'ollama') {
@@ -644,7 +770,13 @@ export async function aiWebSearch(query: string, maxResults = 3): Promise<string
 }
 
 export async function listCloudModels(): Promise<{ models: string[]; error?: string }> {
-  const rt = loadAiRuntime();
+  let rt: AiRuntime;
+  try {
+    rt = await materializeRuntime();
+  } catch (e) {
+    const fallback = loadAiRuntime();
+    return { models: fallbackModels(fallback.provider), error: redactSecrets((e as Error).message, fallback.apiKey) };
+  }
   if (!rt.apiKey) return { models: fallbackModels(rt.provider), error: 'No API key configured' };
   try {
     const models = await listModels(rt);
@@ -682,6 +814,25 @@ export async function testConnection(override?: {
   const pastedKey = (override?.apiKey || '').trim();
   let baseUrl = provider === 'ollama' ? (getSetting('ai.baseUrl') || config.ai.baseUrl) : endpointFor(provider, '');
   let apiKey = pastedKey || (provider === rt.provider ? rt.apiKey : keyFor(provider));
+  let grokVia: 'subscription' | 'api_key' = 'api_key';
+  if (provider === 'grok' && !pastedKey && hasGrokSubscription()) {
+    try {
+      const token = await getGrokAccessToken();
+      if (token) {
+        apiKey = token;
+        baseUrl = GROK_SUBSCRIPTION_ENDPOINT;
+        grokVia = 'subscription';
+      }
+    } catch (e) {
+      return {
+        ok: false,
+        latencyMs: null,
+        errorCategory: 'auth',
+        message: redactSecrets((e as Error).message || 'Could not refresh the Grok subscription', apiKey),
+        testedAt,
+      };
+    }
+  }
 
   if (provider === 'ollama') {
     const requested = (override?.baseUrl || '').trim();
@@ -711,11 +862,15 @@ export async function testConnection(override?: {
 
   const start = Date.now();
   try {
-    const models = await listModels({ provider, baseUrl, apiKey, model });
+    const models = await listModels({ provider, baseUrl, apiKey, model, grokVia });
     const latencyMs = Date.now() - start;
     await logTest('success', latencyMs, null);
-    const label = provider === 'grok' ? 'Grok' : provider === 'cursor' ? 'Cursor' : 'Ollama';
-    const extra = provider === 'cursor' ? ' Chat calls use a short-lived no-repo agent that is deleted after each reply.' : '';
+    const label = provider === 'grok' ? (grokVia === 'subscription' ? 'Grok subscription' : 'Grok') : provider === 'cursor' ? 'Cursor' : 'Ollama';
+    const extra = provider === 'cursor'
+      ? ' Chat calls use a short-lived no-repo agent that is deleted after each reply.'
+      : grokVia === 'subscription'
+        ? ' Requests use the Grok subscription.'
+        : '';
     return {
       ok: true,
       latencyMs,

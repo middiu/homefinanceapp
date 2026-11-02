@@ -139,6 +139,28 @@ export interface AiInsightDto {
   relatedPeriod: string;
 }
 
+/** Subscription sign-in state. Tokens and minted keys are never included. */
+export interface AiSubscriptionDto {
+  connected: boolean;
+  email: string | null;
+  expiresAt: string | null;
+}
+
+/** Live sign-in step shown in settings. Secrets (device codes, verifiers, tokens) are omitted. */
+export interface AiSubscriptionView {
+  status: 'idle' | 'pending' | 'connected' | 'denied' | 'expired' | 'error';
+  userCode?: string;
+  verificationUri?: string;
+  verificationUriComplete?: string;
+  loginUrl?: string;
+  /** When the pending sign-in code expires. */
+  codeExpiresAt?: string;
+  email?: string | null;
+  /** When the stored subscription credential expires. */
+  expiresAt?: string | null;
+  message?: string;
+}
+
 export interface AiConfigDto {
   provider: AiProviderId;
   enabled: boolean;
@@ -151,6 +173,11 @@ export interface AiConfigDto {
   hasApiKey: boolean;
   /** Which providers have a server-side key. The key itself is never included. */
   keysConfigured: Record<AiProviderId, boolean>;
+  /** Grok device-code login and Cursor account login. Connected means a server-side credential exists. */
+  subscription: {
+    grok: AiSubscriptionDto;
+    cursor: AiSubscriptionDto;
+  };
   digestCron: string;
   autoCategorize: boolean; // Phase 2 §3.2
 }

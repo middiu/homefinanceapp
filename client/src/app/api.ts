@@ -5,6 +5,7 @@ import type {
   AiConfigUpdate,
   AiConnectionTestResult,
   AiConnectionTestLogEntry,
+  AiSubscriptionView,
   AnomalyDto,
   BudgetDto,
   CategoryAnalytics,
@@ -177,6 +178,14 @@ export const api = createApi({
     // ---- Settings ----
     getAiConfig: b.query<AiConfigDto, void>({ query: () => '/settings/ai', providesTags: ['Setting'] }),
     updateAiConfig: b.mutation<{ ok: true }, AiConfigUpdate>({ query: (body) => ({ url: '/settings/ai', method: 'PUT', body }), invalidatesTags: ['Setting', 'Insight'] }),
+    getGrokSubscription: b.query<AiSubscriptionView, void>({ query: () => '/settings/ai/subscription/grok', providesTags: ['Setting'] }),
+    startGrokSubscription: b.mutation<AiSubscriptionView, void>({ query: () => ({ url: '/settings/ai/subscription/grok/start', method: 'POST' }), invalidatesTags: ['Setting'] }),
+    cancelGrokSubscription: b.mutation<AiSubscriptionView, void>({ query: () => ({ url: '/settings/ai/subscription/grok/cancel', method: 'POST' }), invalidatesTags: ['Setting'] }),
+    disconnectGrokSubscription: b.mutation<AiSubscriptionView, void>({ query: () => ({ url: '/settings/ai/subscription/grok', method: 'DELETE' }), invalidatesTags: ['Setting'] }),
+    getCursorSubscription: b.query<AiSubscriptionView, void>({ query: () => '/settings/ai/subscription/cursor', providesTags: ['Setting'] }),
+    startCursorSubscription: b.mutation<AiSubscriptionView, void>({ query: () => ({ url: '/settings/ai/subscription/cursor/start', method: 'POST' }), invalidatesTags: ['Setting'] }),
+    cancelCursorSubscription: b.mutation<AiSubscriptionView, void>({ query: () => ({ url: '/settings/ai/subscription/cursor/cancel', method: 'POST' }), invalidatesTags: ['Setting'] }),
+    disconnectCursorSubscription: b.mutation<AiSubscriptionView, void>({ query: () => ({ url: '/settings/ai/subscription/cursor', method: 'DELETE' }), invalidatesTags: ['Setting'] }),
 
     // ---- Backups ----
     listBackups: b.query<{ name: string; size: number; mtime: string }[], void>({ query: () => '/backups', providesTags: ['Backup'] }),
@@ -200,5 +209,7 @@ export const {
   useListBudgetsQuery, useUpsertBudgetMutation, useDeleteBudgetMutation,
   useAiStatusQuery, useGenerateInsightMutation, useLatestInsightQuery, useGenerateForecastMutation, useListAnomaliesQuery, useListSubscriptionsQuery, useListCloudModelsQuery, useTestConnectionMutation, useTestHistoryQuery, useSuggestAiCategoryMutation,
   useGetAiConfigQuery, useUpdateAiConfigMutation,
+  useGetGrokSubscriptionQuery, useStartGrokSubscriptionMutation, useCancelGrokSubscriptionMutation, useDisconnectGrokSubscriptionMutation,
+  useGetCursorSubscriptionQuery, useStartCursorSubscriptionMutation, useCancelCursorSubscriptionMutation, useDisconnectCursorSubscriptionMutation,
   useListBackupsQuery, useCreateBackupMutation, useDeleteBackupMutation,
 } = api;

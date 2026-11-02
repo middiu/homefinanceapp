@@ -48,10 +48,10 @@ Stop: `podman compose down`. Rebuild after code changes: `podman compose up --bu
 | `DATABASE_URL` | `./data/homefinance.sqlite` | SQLite path — container overrides to `/data/homefinance.sqlite` (named volume `homefinance-db`) |
 | `AI_ENABLED` | true | master switch for AI features |
 | `AI_PROVIDER` | `ollama` | `ollama`, `grok`, or `cursor` |
-| `AI_BASE_URL` | `https://ollama.com/v1` | Ollama host only. Grok is pinned to `https://api.x.ai` and Cursor to `https://api.cursor.com` |
+| `AI_BASE_URL` | `https://ollama.com/v1` | Ollama host only. A Grok API key is pinned to `https://api.x.ai`. A Grok subscription is pinned to `https://cli-chat-proxy.grok.com`. Cursor is pinned to `https://api.cursor.com` |
 | `AI_API_KEY` | — | key for `AI_PROVIDER` only; never returned to the browser |
-| `AI_GROK_API_KEY` | — | xAI key, used when the provider is Grok |
-| `AI_CURSOR_API_KEY` | — | Cursor API key, used when the provider is Cursor |
+| `AI_GROK_API_KEY` | — | xAI key, used for Grok when no subscription is connected |
+| `AI_CURSOR_API_KEY` | — | Cursor API key, used when you have not signed in with a Cursor account |
 | `AI_MODEL` | provider default | model id (`llama3.1`, `grok-4.7`, `composer-2.5`, …) |
 | `AI_DIGEST_CRON` | `0 7 * * 1` | weekly digest schedule |
 | `BACKUP_DIR` | `./backups` | backup directory — container overrides to `/backups` (named volume `homefinance-backups`) |

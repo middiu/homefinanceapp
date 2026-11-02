@@ -86,6 +86,9 @@ export const AI_PROVIDER_ENDPOINTS: Record<'grok' | 'cursor', string> = {
   cursor: 'https://api.cursor.com',
 };
 
+/** Grok CLI subscription proxy. Used only with a server-side OAuth access token. */
+export const GROK_SUBSCRIPTION_ENDPOINT = 'https://cli-chat-proxy.grok.com';
+
 // Suggested text models when the live catalogue cannot be fetched. The settings
 // screen prefers the account's live list once a key is saved.
 export const GROK_MODELS: string[] = ['grok-4.7', 'grok-4', 'grok-3', 'grok-3-mini'];

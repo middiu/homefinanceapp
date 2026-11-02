@@ -71,7 +71,7 @@ homefinance/
 
 - **Single implicit household** for MVP. The `households` table exists but business logic is global; an auth layer (future) would partition by household/user without a major rewrite.
 - **Ownership split is current-state** (not effective-dated) for MVP — applies to all transactions. v2 may add effective-dated splits.
-- **Provider switch** (`services/aiProvider.ts`) for Ollama, Grok (`https://api.x.ai`), or Cursor (`https://api.cursor.com`). Grok and Cursor hosts are pinned. Keys are stored per provider and never returned to the browser. See ADR 0005.
+- **Provider switch** (`services/aiProvider.ts`, `services/aiSubscription.ts`) for Ollama, Grok, or Cursor. API-key hosts are pinned (`api.x.ai`, `api.cursor.com`). A Grok device-code sign-in uses the subscription proxy `cli-chat-proxy.grok.com`. Cursor account sign-in mints a user API key and drops the session token. Keys and tokens are stored server-side and never returned to the browser. See ADR 0005.
 - **Two DDL paths:** Drizzle migrations (`drizzle/`) are preferred, but `db/bootstrap.ts` also creates tables idempotently so the app boots without first running `drizzle-kit generate`.
 
 ## Locale
