@@ -2,7 +2,7 @@
 
 ## Overview
 
-HomeFinance is a self-hosted single-container web app. The Express API serves both the JSON REST API (`/api/*`) and, in production, the built React SPA (static files + history-fallback). A SQLite file on a mounted volume holds all financial data. An optional AI provider (Ollama Cloud) is called server-side only.
+HomeFinance is a self-hosted single-container web app. The Express API serves both the JSON REST API (`/api/*`) and, in production, the built React SPA (static files + history-fallback). A SQLite file on a mounted volume holds all financial data. An optional AI provider (Ollama, Grok on xAI, or Cursor) is called server-side only.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -26,9 +26,9 @@ HomeFinance is a self-hosted single-container web app. The Express API serves bo
       │ Drizzle ORM            │ server-side fetch (aggregates only)
       ▼                        ▼
 ┌──────────────┐       ┌──────────────────────┐
-│ SQLite (WAL) │       │ AI provider           │
-│ ./data/*.db  │       │ Ollama Cloud (OpenAI) │
-└──────────────┘       └──────────────────────┘
+│ SQLite (WAL) │       │ AI provider                         │
+│ ./data/*.db  │       │ Ollama, Grok (api.x.ai), or Cursor  │
+└──────────────┘       └─────────────────────────────────────┘
 ```
 
 ## Monorepo layout
@@ -71,7 +71,7 @@ homefinance/
 
 - **Single implicit household** for MVP. The `households` table exists but business logic is global; an auth layer (future) would partition by household/user without a major rewrite.
 - **Ownership split is current-state** (not effective-dated) for MVP — applies to all transactions. v2 may add effective-dated splits.
-- **Provider abstraction** (`services/ai.ts` `AiProvider`) so Ollama Cloud can be swapped for local Ollama or any OpenAI-compatible endpoint via config.
+- **Provider switch** (`services/aiProvider.ts`) for Ollama, Grok (`https://api.x.ai`), or Cursor (`https://api.cursor.com`). Grok and Cursor hosts are pinned. Keys are stored per provider and never returned to the browser. See ADR 0005.
 - **Two DDL paths:** Drizzle migrations (`drizzle/`) are preferred, but `db/bootstrap.ts` also creates tables idempotently so the app boots without first running `drizzle-kit generate`.
 
 ## Locale

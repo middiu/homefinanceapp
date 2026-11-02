@@ -61,6 +61,36 @@ export const DEFAULT_CATEGORIES: { name: string; type: CategoryType; essential?:
   { name: 'Other', type: 'expense', essential: null },
 ];
 
+// Which remote model host the server is allowed to call. Ollama may also point
+// at a local server; Grok and Cursor hosts are pinned and cannot be overridden.
+export const AI_PROVIDERS = ['ollama', 'grok', 'cursor'] as const;
+export type AiProviderId = (typeof AI_PROVIDERS)[number];
+
+export const AI_PROVIDER_DEFAULT_MODEL: Record<AiProviderId, string> = {
+  ollama: 'llama3.1',
+  grok: 'grok-4.7',
+  cursor: 'grok-4.7',
+};
+
+/** True when this model id is meaningful for the provider. */
+export function aiModelFitsProvider(provider: AiProviderId, model: string): boolean {
+  const id = model.toLowerCase();
+  if (provider === 'grok') return id.startsWith('grok');
+  if (provider === 'ollama') return !id.startsWith('grok') && !id.startsWith('composer');
+  return true;
+}
+
+/** Pinned HTTPS origins. The client cannot redirect these calls. */
+export const AI_PROVIDER_ENDPOINTS: Record<'grok' | 'cursor', string> = {
+  grok: 'https://api.x.ai',
+  cursor: 'https://api.cursor.com',
+};
+
+// Suggested text models when the live catalogue cannot be fetched. The settings
+// screen prefers the account's live list once a key is saved.
+export const GROK_MODELS: string[] = ['grok-4.7', 'grok-4', 'grok-3', 'grok-3-mini'];
+export const CURSOR_MODELS: string[] = ['grok-4.7', 'composer-2.5'];
+
 // Cloud-hosted Ollama model allow-list (§5.2). The /models listing may include
 // names that only work against a local Ollama install; restrict the dropdown to
 // these known cloud-hosted identifiers. Editable as the cloud catalogue grows.

@@ -84,8 +84,10 @@ Base URL: `/api`. All request/response bodies are JSON (multipart for file uploa
 ## Settings
 | Method | Path | Body | Returns |
 |---|---|---|---|
-| GET | `/api/settings/ai` | — | `AiConfigDto` (`hasApiKey`, never the key) |
-| PUT | `/api/settings/ai` | `{ enabled?, baseUrl?, model?, apiKey?, digestCron? }` | `{ ok }` |
+| GET | `/api/settings/ai` | — | `AiConfigDto` (`provider`, `endpoint`, `hasApiKey`, `keysConfigured`; never the key) |
+| PUT | `/api/settings/ai` | `{ provider?, enabled?, baseUrl?, model?, apiKey?, digestCron?, autoCategorize? }` | `{ ok }` |
+
+`provider` is `ollama`, `grok`, or `cursor`. `baseUrl` is saved only for Ollama. Grok calls `https://api.x.ai` and Cursor calls `https://api.cursor.com`; a client-supplied base URL cannot redirect those keys. `apiKey` is stored for the provider being saved and is not echoed. `POST /api/ai/test-connection` accepts `{ provider?, baseUrl?, apiKey?, model? }` and lists models. For Ollama, the stored key is sent only when the tested host matches the saved host.
 
 ## Backups
 | Method | Path | Returns |

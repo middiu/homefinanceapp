@@ -10,7 +10,7 @@ A self-hosted, private web application for tracking household finances. Import b
 
 - **Frontend:** React 18, TypeScript, Redux Toolkit (RTK Query), React Router, Tailwind CSS, shadcn/ui-style components, Recharts
 - **Backend:** Node.js + Express, TypeScript, Drizzle ORM, SQLite (better-sqlite3)
-- **AI:** server-side provider abstraction; default Ollama Cloud (OpenAI-compatible `/chat/completions`)
+- **AI:** server-side provider switch — Ollama (default), Grok via the xAI API, or a Cursor catalogue model. API keys stay on the server. Grok and Cursor hosts are pinned.
 - **Scheduler:** node-cron (weekly AI digest + daily backup)
 - **Tests:** Vitest
 - **Container runtime:** Podman (Docker-compatible; `docker compose` works too)
@@ -72,7 +72,7 @@ See [`.env.example`](./.env.example) for the full list with defaults:
 
 - `PORT` — server port (default 4000)
 - `DATABASE_URL` — SQLite path (default `./data/homefinance.sqlite`)
-- `AI_ENABLED` / `AI_BASE_URL` / `AI_API_KEY` / `AI_MODEL` — Ollama Cloud config; leave disabled for no external calls
+- `AI_ENABLED` / `AI_PROVIDER` / `AI_BASE_URL` / `AI_API_KEY` / `AI_GROK_API_KEY` / `AI_CURSOR_API_KEY` / `AI_MODEL` — provider config; leave AI disabled for no external calls
 - `AI_DIGEST_CRON` — weekly insight schedule (default `0 7 * * 1`, Monday 07:00)
 - `BACKUP_DIR` / `BACKUP_CRON` / `BACKUP_KEEP` — daily DB backup config
 - `ADMIN_INITIAL_PASSWORD` — initial admin password (seeded once on first boot; default `Pa$$word!`; change on first login — forced)

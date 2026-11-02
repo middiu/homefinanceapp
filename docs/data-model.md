@@ -128,7 +128,7 @@ Saved CSV column-mapping templates (per bank/account).
 | related_period | TEXT? | |
 
 ### settings
-Key/value store for AI provider config etc. The API key is stored here (server-side only, never returned to the client).
+Key/value store for AI provider config. Keys are stored per provider (`ai.apiKey.ollama`, `ai.apiKey.grok`, `ai.apiKey.cursor`). The legacy `ai.apiKey` value is the Ollama key from before provider selection. None of these values are returned to the client.
 
 | column | type | notes |
 |---|---|---|

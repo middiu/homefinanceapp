@@ -5,15 +5,25 @@ function bool(v: string | undefined, def: boolean): boolean {
   return v === 'true' || v === '1' || v === 'yes';
 }
 
+function parseAiProvider(v: string | undefined): 'ollama' | 'grok' | 'cursor' {
+  if (v === 'grok' || v === 'cursor' || v === 'ollama') return v;
+  return 'ollama';
+}
+
 export const config = {
   port: parseInt(process.env.PORT || '4000', 10),
   databaseUrl: process.env.DATABASE_URL || './data/homefinance.sqlite',
   clientDist: process.env.CLIENT_DIST || './client/dist',
   ai: {
     enabled: bool(process.env.AI_ENABLED, true),
+    provider: parseAiProvider(process.env.AI_PROVIDER),
     baseUrl: process.env.AI_BASE_URL || 'https://ollama.com/v1',
+    // AI_API_KEY applies only to AI_PROVIDER (default ollama). It is never reused
+    // as the Grok or Cursor key, so switching provider cannot leak the other secret.
     apiKey: process.env.AI_API_KEY || '',
-    model: process.env.AI_MODEL || 'llama3.1',
+    grokApiKey: process.env.AI_GROK_API_KEY || '',
+    cursorApiKey: process.env.AI_CURSOR_API_KEY || '',
+    model: process.env.AI_MODEL || '',
     digestCron: process.env.AI_DIGEST_CRON || '0 7 * * 1',
   },
   backup: {

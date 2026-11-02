@@ -69,7 +69,7 @@ Three tiers, applied in this precedence:
 
 ### AI privacy boundary (§4.5)
 
-The AI provider is a **remote cloud service** (Ollama Cloud by default). Only the bare minimum leaves the server — never account numbers, balances, raw dumps, or personal names. Three egress shapes:
+The AI provider is a **remote service** selected in settings: Ollama (default), Grok (xAI), or Cursor. Only the bare minimum leaves the server — never account numbers, balances, raw dumps, or personal names. Three egress shapes:
 - **Insight / forecast / forecast-report** send **aggregates and statistical numbers only** (category totals, monthly net, projection figures). No transaction text.
 - **Categorization** (import auto-categorize + re-categorize) sends **one sanitized descriptor + the amount** per transaction. `sanitizeForAi()` (`services/ai.ts`) strips account/card/reference numbers (runs of 4+ digits), BSB, and card groups, collapses whitespace, caps at 80 chars — preserving only the merchant words needed to identify the shop.
 - **Web search** (`aiWebSearch`) sends the **same sanitized descriptor** + "merchant shop australia".
@@ -86,7 +86,7 @@ Transfers (`isTransfer`) are **skipped for AI** in re-categorize — their memos
 
 ### AI provider + jobs/progress
 
-`services/ai.ts` uses the **official `ollama` (ollama-js) client** against an Ollama host (Ollama Cloud `https://ollama.com` default, or local/remote Ollama). `normalizeHost()` strips `/v1` so legacy `https://ollama.com/v1` config still works — the native `/api/chat` endpoint is used, *not* the OpenAI-compatible `/v1`. `aiWebSearch()` uses `ollama.webSearch()` (hosted at ollama.com, requires API key) for merchant lookup during categorization. Provider config (baseUrl, model, apiKey, enabled, autoCategorize) lives in the `settings` table, falling back to env (`config.ai`); **apiKey is never sent to the client**.
+`services/aiProvider.ts` selects the provider (`ai.provider`: `ollama` | `grok` | `cursor`). Ollama uses the official `ollama` client (Ollama Cloud `https://ollama.com` by default, or a local host). `normalizeHost()` strips `/v1`. Grok calls `https://api.x.ai/v1/responses` only. Cursor calls `https://api.cursor.com` only: each reply is a no-repo plan-mode agent that is deleted afterwards (Cursor has no stateless chat API). Keys are stored per provider (`ai.apiKey.ollama|grok|cursor`); the legacy `ai.apiKey` is the Ollama key and is never sent to the other hosts. **No API key is returned to the client.** A connection test will not attach a stored Ollama key to a different host.
 
 Long-running AI ops (insight, forecast, forecast-report, re-categorize, **import auto-categorize**) run as **jobs** (`services/jobs.ts`, in-memory registry + EventEmitter). The route returns `{jobId}` (HTTP 202) immediately; progress streams over SSE at `GET /api/ai/jobs/:id/events` (also pollable at `GET /api/ai/jobs/:id`). Client subscribes via `useJobProgress` + `<JobProgressModal>`. Import `/commit` returns `{batchId, inserted, duplicates, jobId?, total}` (HTTP 201) — the DB inserts + transfer linking complete synchronously and the records exist before the response is sent; when AI auto-categorize is on and there are unmatched rows, `jobId` is set and categorization continues in the background so the client isn't blocked. Jobs are ephemeral — a restart drops them (acceptable for single-user self-hosted). Forecast arithmetic is statistical server-side; AI only narrates — it never generates the numbers.
 

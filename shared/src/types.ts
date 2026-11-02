@@ -7,6 +7,7 @@ import type {
   RuleMatchType,
   RuleSource,
   CategoryType,
+  AiProviderId,
 } from './enums.js';
 
 export interface MemberDto {
@@ -139,13 +140,30 @@ export interface AiInsightDto {
 }
 
 export interface AiConfigDto {
+  provider: AiProviderId;
   enabled: boolean;
+  /** Saved Ollama base URL. Grok and Cursor ignore this and use a pinned host. */
   baseUrl: string;
+  /** Origin the active provider actually calls. */
+  endpoint: string;
   model: string;
   // apiKey is never sent to the client
   hasApiKey: boolean;
+  /** Which providers have a server-side key. The key itself is never included. */
+  keysConfigured: Record<AiProviderId, boolean>;
   digestCron: string;
   autoCategorize: boolean; // Phase 2 §3.2
+}
+
+/** Settings write. `apiKey` is accepted and stored, never echoed back. */
+export interface AiConfigUpdate {
+  provider?: AiProviderId;
+  enabled?: boolean;
+  baseUrl?: string;
+  model?: string;
+  apiKey?: string;
+  digestCron?: string;
+  autoCategorize?: boolean;
 }
 
 // Phase 2 §5 — AI connection test result

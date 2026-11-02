@@ -1,13 +1,24 @@
 import { getDb, schema } from '../db/index.js';
-import { config } from '../config.js';
 import { uid, round2 } from '../utils.js';
 import { eq } from 'drizzle-orm';
 import type { InsightType } from '@homefinance/shared';
-import { OLLAMA_CLOUD_MODELS } from '@homefinance/shared';
 import { matchRule, deriveMatchPattern, createOrUpdateAiRule, getActiveRules } from './rules.js';
 import { ownershipMap } from './transactions.js';
-import { Ollama } from 'ollama';
 import { updateJob } from './jobs.js';
+import { aiWebSearch, chat, isAiEnabled } from './aiProvider.js';
+
+export {
+  aiWebSearch,
+  isAiEnabled,
+  isAutoCategorizeEnabled,
+  listCloudModels,
+  testConnection,
+  normalizeHost,
+} from './aiProvider.js';
+
+export function getProvider(): { chat(prompt: string, system?: string): Promise<string> } {
+  return { chat };
+}
 
 // ---- Privacy: sanitize before sending to cloud model (§4.5) ----
 // The AI provider is a remote cloud service. Only the bare minimum needed for
@@ -45,95 +56,6 @@ function jobStage(jobId: string | undefined, stage: string, progress: number, to
   const patch: { stage: string; progress: number; message: string; total?: number } = { stage, progress, message };
   if (total !== undefined) patch.total = total;
   updateJob(jobId, patch);
-}
-
-// ---- Provider abstraction (§3.5 / §4.1) ----
-// Uses the official ollama-js client against an Ollama host (Ollama Cloud at
-// https://ollama.com by default, or a local/remote Ollama server). The native
-// /api/chat endpoint is used (not the OpenAI-compatible /v1), which also enables
-// ollama.webSearch() for merchant lookups during categorization.
-interface AiProvider {
-  chat(prompt: string, system?: string): Promise<string>;
-}
-
-function getSetting(key: string): string | null {
-  const r = getDb().select().from(schema.settings).where(eq(schema.settings.key, key)).get();
-  return r ? r.value : null;
-}
-
-function aiConfig() {
-  return {
-    enabled: getSetting('ai.enabled') !== 'false' && config.ai.enabled,
-    baseUrl: getSetting('ai.baseUrl') || config.ai.baseUrl,
-    apiKey: getSetting('ai.apiKey') || config.ai.apiKey,
-    model: getSetting('ai.model') || config.ai.model,
-  };
-}
-
-export function isAiEnabled(): boolean {
-  return aiConfig().enabled && !!aiConfig().apiKey;
-}
-
-/** Phase 2 §3.2 — separate toggle for automatic per-import AI categorization. */
-export function isAutoCategorizeEnabled(): boolean {
-  const raw = getSetting('ai.autoCategorize');
-  if (raw !== null) return raw === 'true';
-  // default: on when a key is configured
-  return isAiEnabled();
-}
-
-/** Normalize an Ollama host URL. The legacy default was the OpenAI-compatible
- *  `https://ollama.com/v1`; the native ollama-js client wants the bare host
- *  (no `/v1`, no trailing slash). */
-export function normalizeHost(url: string): string {
-  let h = (url || '').trim();
-  h = h.replace(/\/v1\/?$/i, '');
-  h = h.replace(/\/+$/, '');
-  return h || 'https://ollama.com';
-}
-
-/** Build an ollama-js client from current settings/env. */
-export function getOllamaClient(): Ollama {
-  const cfg = aiConfig();
-  return new Ollama({
-    host: normalizeHost(cfg.baseUrl),
-    headers: cfg.apiKey ? { Authorization: `Bearer ${cfg.apiKey}` } : {},
-  });
-}
-
-class OllamaCloudProvider implements AiProvider {
-  async chat(prompt: string, system?: string): Promise<string> {
-    const cfg = aiConfig();
-    if (!cfg.enabled || !cfg.apiKey) throw new Error('AI not configured (missing API key or disabled)');
-    const client = getOllamaClient();
-    const messages = [
-      ...(system ? [{ role: 'system', content: system }] : []),
-      { role: 'user', content: prompt },
-    ];
-    const resp = await client.chat({ model: cfg.model, messages, stream: false });
-    return resp.message?.content?.trim() || '';
-  }
-}
-
-export function getProvider(): AiProvider {
-  return new OllamaCloudProvider();
-}
-
-/** Web search via Ollama (ollama-js). Hosted at ollama.com regardless of client
- *  host; requires an API key. Returns concatenated result snippets (merchant
- *  context for categorization). Returns '' on failure so categorization degrades
- *  gracefully without search context. */
-export async function aiWebSearch(query: string, maxResults = 3): Promise<string> {
-  const cfg = aiConfig();
-  if (!cfg.enabled || !cfg.apiKey) return '';
-  try {
-    const client = getOllamaClient();
-    const res = await client.webSearch({ query, maxResults });
-    return (res.results || []).map((r) => r.content).join('\n').trim();
-  } catch (e) {
-    console.warn('[ai] webSearch failed for', query, (e as Error).message);
-    return '';
-  }
 }
 
 // ---- Aggregation helpers (only send aggregates to AI, not raw dumps §4.5) ----
@@ -327,74 +249,6 @@ export function latestInsight(scope: string = 'household') {
     .where(eq(schema.aiInsights.scope, scope))
     .all()
     .sort((a, b) => b.generatedAt.localeCompare(a.generatedAt))[0];
-}
-
-// ---- Phase 2 §5 — connector: cloud model list ----
-/** Fetch available models from the provider's /models endpoint, filtered to the
- *  cloud-hosted allow-list (§5.2). Returns model identifiers. */
-export async function listCloudModels(): Promise<{ models: string[]; raw?: any[]; error?: string }> {
-  const cfg = aiConfig();
-  if (!cfg.apiKey) return { models: [], error: 'No API key configured' };
-  try {
-    const client = getOllamaClient();
-    const data = await client.list();
-    const raw: any[] = data?.models ?? [];
-    const ids: string[] = raw.map((m: any) => (typeof m === 'string' ? m : m.name || m.model)).filter(Boolean);
-    // Filter to cloud-hosted allow-list (§5.2) — keep order of allow-list, only those present.
-    const present = new Set(ids.map((id) => id.toLowerCase()));
-    const filtered = OLLAMA_CLOUD_MODELS.filter((m) => present.has(m.toLowerCase()));
-    // Also include any returned ids that exactly match an allow-list entry (case-insensitive).
-    return { models: filtered.length ? filtered : ids.filter((id) => OLLAMA_CLOUD_MODELS.map((m) => m.toLowerCase()).includes(id.toLowerCase())), raw: ids };
-  } catch (e) {
-    return { models: [], error: (e as Error).message };
-  }
-}
-
-// ---- Phase 2 §5.3 — connection troubleshooting ----
-export async function testConnection(override?: { baseUrl?: string; apiKey?: string }): Promise<{
-  ok: boolean;
-  latencyMs: number | null;
-  errorCategory: 'auth' | 'network' | 'url' | 'unexpected' | null;
-  message: string;
-  models?: string[];
-  testedAt: string;
-}> {
-  const cfg = aiConfig();
-  const baseUrl = (override?.baseUrl ?? (cfg.baseUrl || '')).trim();
-  const apiKey = override?.apiKey ?? cfg.apiKey;
-  const testedAt = new Date().toISOString();
-  if (!baseUrl || !/^https?:\/\//i.test(baseUrl)) {
-    return { ok: false, latencyMs: null, errorCategory: 'url', message: 'Base URL must start with http:// or https://', testedAt };
-  }
-  if (!apiKey) {
-    return { ok: false, latencyMs: null, errorCategory: 'auth', message: 'No API key configured', testedAt };
-  }
-  const start = Date.now();
-  try {
-    const client = new Ollama({ host: normalizeHost(baseUrl), headers: { Authorization: `Bearer ${apiKey}` } });
-    const data = await client.list();
-    const latencyMs = Date.now() - start;
-    const raw: any[] = data?.models ?? [];
-    const ids: string[] = raw.map((m: any) => (typeof m === 'string' ? m : m.name || m.model)).filter(Boolean);
-    const present = new Set(ids.map((id) => id.toLowerCase()));
-    const models = OLLAMA_CLOUD_MODELS.filter((m) => present.has(m.toLowerCase()));
-    await logTest('success', latencyMs, null);
-    return { ok: true, latencyMs, errorCategory: null, message: `Connection OK. ${models.length} cloud model(s) available.`, models, testedAt };
-  } catch (e) {
-    const latencyMs = Date.now() - start;
-    const msg = (e as Error).message || String(e);
-    const category = /401|403|auth|unauthor/i.test(msg) ? 'auth' : /ENOTFOUND|ECONNREFUSED|fetch failed|network|timeout/i.test(msg) ? 'network' : 'unexpected';
-    await logTest('failure', latencyMs, category);
-    return { ok: false, latencyMs, errorCategory: category as any, message: msg, testedAt };
-  }
-}
-
-async function logTest(outcome: 'success' | 'failure', latencyMs: number, errorCategory: string | null) {
-  try {
-    getDb().insert(schema.aiConnectionTestLog).values({ id: uid(), outcome, latencyMs, errorCategory }).run();
-  } catch {
-    /* ignore logging failures */
-  }
 }
 
 export function testHistory(limit = 10) {

@@ -2,6 +2,7 @@ import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react';
 import type {
   AccountDto,
   AiConfigDto,
+  AiConfigUpdate,
   AiConnectionTestResult,
   AiConnectionTestLogEntry,
   AnomalyDto,
@@ -166,8 +167,8 @@ export const api = createApi({
     generateForecast: b.mutation<any, { scope?: string }>({ query: (body) => ({ url: '/ai/forecast', method: 'POST', body }) }),
     listAnomalies: b.query<AnomalyDto[], { accountId?: string }>({ query: (p) => ({ url: '/ai/anomalies', params: p }) }),
     listSubscriptions: b.query<SubscriptionDto[], { accountId?: string }>({ query: (p) => ({ url: '/ai/subscriptions', params: p }) }),
-    listCloudModels: b.query<{ models: string[]; error?: string }, void>({ query: () => '/ai/models' }),
-    testConnection: b.mutation<AiConnectionTestResult, { baseUrl?: string; apiKey?: string }>({ query: (body) => ({ url: '/ai/test-connection', method: 'POST', body }), invalidatesTags: ['TestHistory'] }),
+    listCloudModels: b.query<{ models: string[]; error?: string }, void>({ query: () => '/ai/models', providesTags: ['Setting'] }),
+    testConnection: b.mutation<AiConnectionTestResult, { provider?: AiConfigDto['provider']; baseUrl?: string; apiKey?: string; model?: string }>({ query: (body) => ({ url: '/ai/test-connection', method: 'POST', body }), invalidatesTags: ['TestHistory'] }),
     testHistory: b.query<AiConnectionTestLogEntry[], void>({ query: () => '/ai/test-history', providesTags: ['TestHistory'] }),
     suggestAiCategory: b.mutation<{ categoryId: string | null; suggestedName?: string }, { description: string; amount?: number }>({
       query: (body) => ({ url: '/ai/suggest-category', method: 'POST', body }),
@@ -175,7 +176,7 @@ export const api = createApi({
 
     // ---- Settings ----
     getAiConfig: b.query<AiConfigDto, void>({ query: () => '/settings/ai', providesTags: ['Setting'] }),
-    updateAiConfig: b.mutation<{ ok: true }, Partial<AiConfigDto>>({ query: (body) => ({ url: '/settings/ai', method: 'PUT', body }), invalidatesTags: ['Setting', 'Insight'] }),
+    updateAiConfig: b.mutation<{ ok: true }, AiConfigUpdate>({ query: (body) => ({ url: '/settings/ai', method: 'PUT', body }), invalidatesTags: ['Setting', 'Insight'] }),
 
     // ---- Backups ----
     listBackups: b.query<{ name: string; size: number; mtime: string }[], void>({ query: () => '/backups', providesTags: ['Backup'] }),

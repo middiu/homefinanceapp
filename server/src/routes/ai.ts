@@ -135,7 +135,14 @@ router.get('/models', async (_req, res) => {
 
 // Phase 2 §5.3 — test connection. Accepts optional baseUrl/apiKey overrides (pre-save).
 router.post('/test-connection', async (req, res) => {
-  const parsed = z.object({ baseUrl: z.string().optional(), apiKey: z.string().optional() }).safeParse(req.body);
+  const parsed = z
+    .object({
+      provider: z.enum(['ollama', 'grok', 'cursor']).optional(),
+      baseUrl: z.string().max(500).optional(),
+      apiKey: z.string().max(2000).optional(),
+      model: z.string().max(128).optional(),
+    })
+    .safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const r = await testConnection(parsed.data);
   res.json(r);
