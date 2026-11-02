@@ -1,7 +1,7 @@
 # ADR 0003 — AI provider abstraction behind a config switch
 
 Date: 2026-08-01
-Status: Accepted
+Status: Accepted (provider list extended by ADR 0005)
 
 ## Context
 MVP requires Ollama Cloud, but users may prefer local Ollama or another OpenAI-compatible endpoint later. AI is optional; some users want zero external calls.

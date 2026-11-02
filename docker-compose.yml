@@ -13,9 +13,12 @@ services:
       DATABASE_URL: /data/homefinance.sqlite
       BACKUP_DIR: /backups
       AI_ENABLED: ${AI_ENABLED:-true}
+      AI_PROVIDER: ${AI_PROVIDER:-ollama}
       AI_BASE_URL: ${AI_BASE_URL:-https://ollama.com/v1}
       AI_API_KEY: ${AI_API_KEY:-}
-      AI_MODEL: ${AI_MODEL:-llama3.1}
+      AI_GROK_API_KEY: ${AI_GROK_API_KEY:-}
+      AI_CURSOR_API_KEY: ${AI_CURSOR_API_KEY:-}
+      AI_MODEL: ${AI_MODEL:-}
       AI_DIGEST_CRON: ${AI_DIGEST_CRON:-0 7 * * 1}
       BACKUP_CRON: ${BACKUP_CRON:-0 3 * * *}
       BACKUP_KEEP: ${BACKUP_KEEP:-14}

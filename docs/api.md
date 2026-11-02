@@ -84,8 +84,18 @@ Base URL: `/api`. All request/response bodies are JSON (multipart for file uploa
 ## Settings
 | Method | Path | Body | Returns |
 |---|---|---|---|
-| GET | `/api/settings/ai` | — | `AiConfigDto` (`hasApiKey`, never the key) |
-| PUT | `/api/settings/ai` | `{ enabled?, baseUrl?, model?, apiKey?, digestCron? }` | `{ ok }` |
+| GET | `/api/settings/ai` | — | `AiConfigDto` (`provider`, `endpoint`, `hasApiKey`, `keysConfigured`, `subscription`; never a key or token) |
+| PUT | `/api/settings/ai` | `{ provider?, enabled?, baseUrl?, model?, apiKey?, digestCron?, autoCategorize? }` | `{ ok }` |
+| GET | `/api/settings/ai/subscription/grok` | — | `AiSubscriptionView` |
+| POST | `/api/settings/ai/subscription/grok/start` | — | starts xAI device-code sign-in (`userCode`, verification URL; no `device_code`) |
+| POST | `/api/settings/ai/subscription/grok/cancel` | — | drops the pending sign-in |
+| DELETE | `/api/settings/ai/subscription/grok` | — | removes stored Grok tokens |
+| GET | `/api/settings/ai/subscription/cursor` | — | `AiSubscriptionView` |
+| POST | `/api/settings/ai/subscription/cursor/start` | — | starts Cursor browser login (login URL; no verifier) |
+| POST | `/api/settings/ai/subscription/cursor/cancel` | — | drops the pending sign-in |
+| DELETE | `/api/settings/ai/subscription/cursor` | — | removes a subscription-minted Cursor key |
+
+`provider` is `ollama`, `grok`, or `cursor`. `baseUrl` is saved only for Ollama. A Grok API key calls `https://api.x.ai`. A connected Grok subscription calls `https://cli-chat-proxy.grok.com`. Cursor calls `https://api.cursor.com`. A client-supplied base URL cannot redirect those credentials. `apiKey` is stored for the provider being saved and is not echoed. Start routes are rate-limited. `POST /api/ai/test-connection` accepts `{ provider?, baseUrl?, apiKey?, model? }` and lists models. For Ollama, the stored key is sent only when the tested host matches the saved host. A pasted Grok key is tested at `api.x.ai`; with no pasted key, a connected subscription is tested instead.
 
 ## Backups
 | Method | Path | Returns |

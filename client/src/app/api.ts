@@ -2,8 +2,10 @@ import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react';
 import type {
   AccountDto,
   AiConfigDto,
+  AiConfigUpdate,
   AiConnectionTestResult,
   AiConnectionTestLogEntry,
+  AiSubscriptionView,
   AnomalyDto,
   BudgetDto,
   CategoryAnalytics,
@@ -166,8 +168,8 @@ export const api = createApi({
     generateForecast: b.mutation<any, { scope?: string }>({ query: (body) => ({ url: '/ai/forecast', method: 'POST', body }) }),
     listAnomalies: b.query<AnomalyDto[], { accountId?: string }>({ query: (p) => ({ url: '/ai/anomalies', params: p }) }),
     listSubscriptions: b.query<SubscriptionDto[], { accountId?: string }>({ query: (p) => ({ url: '/ai/subscriptions', params: p }) }),
-    listCloudModels: b.query<{ models: string[]; error?: string }, void>({ query: () => '/ai/models' }),
-    testConnection: b.mutation<AiConnectionTestResult, { baseUrl?: string; apiKey?: string }>({ query: (body) => ({ url: '/ai/test-connection', method: 'POST', body }), invalidatesTags: ['TestHistory'] }),
+    listCloudModels: b.query<{ models: string[]; error?: string }, void>({ query: () => '/ai/models', providesTags: ['Setting'] }),
+    testConnection: b.mutation<AiConnectionTestResult, { provider?: AiConfigDto['provider']; baseUrl?: string; apiKey?: string; model?: string }>({ query: (body) => ({ url: '/ai/test-connection', method: 'POST', body }), invalidatesTags: ['TestHistory'] }),
     testHistory: b.query<AiConnectionTestLogEntry[], void>({ query: () => '/ai/test-history', providesTags: ['TestHistory'] }),
     suggestAiCategory: b.mutation<{ categoryId: string | null; suggestedName?: string }, { description: string; amount?: number }>({
       query: (body) => ({ url: '/ai/suggest-category', method: 'POST', body }),
@@ -175,7 +177,15 @@ export const api = createApi({
 
     // ---- Settings ----
     getAiConfig: b.query<AiConfigDto, void>({ query: () => '/settings/ai', providesTags: ['Setting'] }),
-    updateAiConfig: b.mutation<{ ok: true }, Partial<AiConfigDto>>({ query: (body) => ({ url: '/settings/ai', method: 'PUT', body }), invalidatesTags: ['Setting', 'Insight'] }),
+    updateAiConfig: b.mutation<{ ok: true }, AiConfigUpdate>({ query: (body) => ({ url: '/settings/ai', method: 'PUT', body }), invalidatesTags: ['Setting', 'Insight'] }),
+    getGrokSubscription: b.query<AiSubscriptionView, void>({ query: () => '/settings/ai/subscription/grok', providesTags: ['Setting'] }),
+    startGrokSubscription: b.mutation<AiSubscriptionView, void>({ query: () => ({ url: '/settings/ai/subscription/grok/start', method: 'POST' }), invalidatesTags: ['Setting'] }),
+    cancelGrokSubscription: b.mutation<AiSubscriptionView, void>({ query: () => ({ url: '/settings/ai/subscription/grok/cancel', method: 'POST' }), invalidatesTags: ['Setting'] }),
+    disconnectGrokSubscription: b.mutation<AiSubscriptionView, void>({ query: () => ({ url: '/settings/ai/subscription/grok', method: 'DELETE' }), invalidatesTags: ['Setting'] }),
+    getCursorSubscription: b.query<AiSubscriptionView, void>({ query: () => '/settings/ai/subscription/cursor', providesTags: ['Setting'] }),
+    startCursorSubscription: b.mutation<AiSubscriptionView, void>({ query: () => ({ url: '/settings/ai/subscription/cursor/start', method: 'POST' }), invalidatesTags: ['Setting'] }),
+    cancelCursorSubscription: b.mutation<AiSubscriptionView, void>({ query: () => ({ url: '/settings/ai/subscription/cursor/cancel', method: 'POST' }), invalidatesTags: ['Setting'] }),
+    disconnectCursorSubscription: b.mutation<AiSubscriptionView, void>({ query: () => ({ url: '/settings/ai/subscription/cursor', method: 'DELETE' }), invalidatesTags: ['Setting'] }),
 
     // ---- Backups ----
     listBackups: b.query<{ name: string; size: number; mtime: string }[], void>({ query: () => '/backups', providesTags: ['Backup'] }),
@@ -199,5 +209,7 @@ export const {
   useListBudgetsQuery, useUpsertBudgetMutation, useDeleteBudgetMutation,
   useAiStatusQuery, useGenerateInsightMutation, useLatestInsightQuery, useGenerateForecastMutation, useListAnomaliesQuery, useListSubscriptionsQuery, useListCloudModelsQuery, useTestConnectionMutation, useTestHistoryQuery, useSuggestAiCategoryMutation,
   useGetAiConfigQuery, useUpdateAiConfigMutation,
+  useGetGrokSubscriptionQuery, useStartGrokSubscriptionMutation, useCancelGrokSubscriptionMutation, useDisconnectGrokSubscriptionMutation,
+  useGetCursorSubscriptionQuery, useStartCursorSubscriptionMutation, useCancelCursorSubscriptionMutation, useDisconnectCursorSubscriptionMutation,
   useListBackupsQuery, useCreateBackupMutation, useDeleteBackupMutation,
 } = api;
